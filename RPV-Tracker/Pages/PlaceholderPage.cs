@@ -26,7 +26,7 @@ namespace RPV_Tracker.Pages
                 AutoSize = false,
                 BackColor = RpvTheme.Cream,
                 Font = RpvTheme.FontH2,
-                ForeColor = RpvTheme.Midnight,
+                ForeColor = RpvTheme.HeadingText,
                 Height = 32,
                 Text = sectionTitle,
                 TextAlign = ContentAlignment.MiddleCenter

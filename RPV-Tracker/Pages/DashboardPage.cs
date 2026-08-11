@@ -1,27 +1,32 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using RPV_Tracker.Branding;
 using RPV_Tracker.Controls;
 using RPV_Tracker.Domains.Auth.Models;
 using RPV_Tracker.Domains.Auth.Services;
-using RPV_Tracker.Domains.Dashboard.Models;
-using RPV_Tracker.Domains.Dashboard.Services;
+using RPV_Tracker.Domains.Pulse.Models;
+using RPV_Tracker.Domains.Pulse.Services;
+using RPV_Tracker.Infrastructure;
 
 namespace RPV_Tracker.Pages
 {
     /// <summary>
-    /// The landing screen after sign-in: a personal greeting, headline figures, the
-    /// approvals queue, and recent activity. Laid out on the brand's 8pt grid with a
-    /// 1200px max content width, centred in whatever space the window gives it.
+    /// The landing screen after sign-in: a personal greeting, your own task headline
+    /// figures, your active/overdue tasks, your performance status, and a 7-day activity
+    /// chart built from locally logged tracking sessions. Everything here is the same
+    /// person's own data the Time Tracker and Task history tabs use — no company-wide
+    /// admin figures, since this app has no such data (or role) to show.
     /// </summary>
     internal class DashboardPage : UserControl
     {
         private const int GreetingHeight = 36;
         private const int DateHeight = 20;
         private const int StatsHeight = 96;
-        private const int SectionsHeight = 392;
+        private const int SectionsHeight = 400;
+        private const int ChartHeight = 220;
         private const int RowHeight = 58;
 
         private readonly Panel scrollHost;
@@ -29,10 +34,15 @@ namespace RPV_Tracker.Pages
         private readonly Label greetingLabel;
         private readonly Label dateLabel;
         private readonly Panel statsRow;
-        private readonly CardPanel approvalsCard;
-        private readonly CardPanel activityCard;
+        private readonly CardPanel tasksCard;
+        private readonly CardPanel statusCard;
+        private readonly CardPanel activityChartCard;
+        private readonly ActivityBarChart activityChart;
 
         private readonly List<StatCard> statCards = new List<StatCard>();
+
+        /// <summary>Raised when "Open time tracker" is clicked, so the shell can switch tabs.</summary>
+        public event EventHandler OpenTrackerRequested;
 
         public DashboardPage()
         {
@@ -53,7 +63,7 @@ namespace RPV_Tracker.Pages
                 AutoSize = false,
                 BackColor = RpvTheme.Cream,
                 Font = RpvTheme.FontH1,
-                ForeColor = RpvTheme.Midnight,
+                ForeColor = RpvTheme.HeadingText,
                 Location = new Point(0, 0),
                 Height = GreetingHeight,
                 Text = BuildGreeting()
@@ -72,14 +82,26 @@ namespace RPV_Tracker.Pages
 
             statsRow = new Panel { BackColor = RpvTheme.Cream, Height = StatsHeight };
 
-            approvalsCard = new CardPanel();
-            activityCard = new CardPanel();
+            tasksCard = new CardPanel();
+            statusCard = new CardPanel();
+
+            activityChartCard = new CardPanel();
+            Label chartHeader = BuildCardHeader("Activity — last 7 days");
+            chartHeader.Dock = DockStyle.Top;
+            activityChart = new ActivityBarChart
+            {
+                Dock = DockStyle.Fill,
+                EmptyText = "Start tracking time on the Time tracker tab to see your activity here."
+            };
+            activityChartCard.Controls.Add(activityChart);
+            activityChartCard.Controls.Add(chartHeader);
 
             content.Controls.Add(greetingLabel);
             content.Controls.Add(dateLabel);
             content.Controls.Add(statsRow);
-            content.Controls.Add(approvalsCard);
-            content.Controls.Add(activityCard);
+            content.Controls.Add(tasksCard);
+            content.Controls.Add(statusCard);
+            content.Controls.Add(activityChartCard);
 
             scrollHost.Controls.Add(content);
             Controls.Add(scrollHost);
@@ -92,16 +114,27 @@ namespace RPV_Tracker.Pages
         {
             base.OnLoad(e);
 
-            DashboardSummary summary;
+            List<PulseTask> tasks = null;
+            Performance perf = null;
+
             try
             {
-                summary = await DashboardService.GetSummaryAsync();
+                tasks = await PulseService.GetMyTasksAsync();
             }
             catch (Exception)
             {
-                // The dashboard is read-only; a failed load should leave the shell usable
-                // rather than throw an unhandled exception onto the UI thread.
-                summary = new DashboardSummary();
+                // Read-only landing screen — a failed load leaves the shell usable rather
+                // than throwing an unhandled exception onto the UI thread.
+                tasks = null;
+            }
+
+            try
+            {
+                perf = await PulseService.GetMyPerformanceAsync();
+            }
+            catch (Exception)
+            {
+                perf = null;
             }
 
             if (IsDisposed)
@@ -109,9 +142,16 @@ namespace RPV_Tracker.Pages
                 return;
             }
 
-            RenderStats(summary.Stats);
-            RenderApprovals(summary.Approvals);
-            RenderActivity(summary.Activity);
+            List<PulseTask> active = (tasks ?? new List<PulseTask>())
+                .Where(t => !t.IsDone)
+                .OrderByDescending(t => t.DaysLate)
+                .ThenByDescending(t => t.active)
+                .ToList();
+
+            RenderStats(active, perf);
+            RenderTasks(active);
+            RenderStatus(perf);
+            RenderActivityChart();
             LayoutContent();
         }
 
@@ -136,6 +176,15 @@ namespace RPV_Tracker.Pages
             }
 
             return part + ", " + name;
+        }
+
+        protected virtual void OnOpenTrackerRequested()
+        {
+            EventHandler handler = OpenTrackerRequested;
+            if (handler != null)
+            {
+                handler(this, EventArgs.Empty);
+            }
         }
 
         // ------------------------------------------------------------------ layout
@@ -171,10 +220,15 @@ namespace RPV_Tracker.Pages
             int leftWidth = (int)((width - gap) * 0.62);
             int rightWidth = width - gap - leftWidth;
 
-            approvalsCard.SetBounds(0, sectionsTop, leftWidth, SectionsHeight);
-            activityCard.SetBounds(leftWidth + gap, sectionsTop, rightWidth, SectionsHeight);
+            tasksCard.SetBounds(0, sectionsTop, leftWidth, SectionsHeight);
+            statusCard.SetBounds(leftWidth + gap, sectionsTop, rightWidth, SectionsHeight);
 
-            content.Height = sectionsTop + SectionsHeight;
+            int chartTop = sectionsTop + SectionsHeight + RpvTheme.Space5;
+            activityChartCard.SetBounds(0, chartTop, width, ChartHeight);
+
+            content.Height = chartTop + ChartHeight;
+
+            scrollHost.AutoScrollMinSize = new Size(0, content.Height);
         }
 
         private void LayoutStatCards(int width)
@@ -200,63 +254,183 @@ namespace RPV_Tracker.Pages
 
         // --------------------------------------------------------------- rendering
 
-        private void RenderStats(List<StatItem> stats)
+        private void RenderStats(List<PulseTask> activeTasks, Performance perf)
         {
             statsRow.Controls.Clear();
             statCards.Clear();
 
-            foreach (StatItem stat in stats)
+            int overdue = activeTasks.Count(t => t.DaysLate > 0);
+
+            AddStat("Active tasks", activeTasks.Count.ToString(), false);
+            AddStat("Overdue", overdue.ToString(), overdue > 0);
+            AddStat("Performance score", perf != null ? perf.score.ToString() : "—", false);
+            AddStat("Tracked today", FormatHours(HoursTrackedOn(DateTime.Today)), false);
+        }
+
+        private void AddStat(string label, string value, bool accent)
+        {
+            var card = new StatCard { Label = label, Value = value, IsAccent = accent };
+            statCards.Add(card);
+            statsRow.Controls.Add(card);
+        }
+
+        private static double HoursTrackedOn(DateTime day)
+        {
+            double totalHours = 0;
+            foreach (TaskHistoryEntry entry in TaskHistoryStore.LoadAll())
             {
-                var card = new StatCard
+                if (entry.StartedAt.Date == day.Date)
                 {
-                    Label = stat.Label,
-                    Value = stat.Value,
-                    IsAccent = stat.IsAccent
-                };
-                statCards.Add(card);
-                statsRow.Controls.Add(card);
+                    totalHours += (entry.EndedAt - entry.StartedAt).TotalHours;
+                }
             }
+            return totalHours;
         }
 
-        private void RenderApprovals(List<ApprovalItem> approvals)
+        private static string FormatHours(double hours)
         {
-            var stack = new List<Control> { BuildCardHeader("Pending your review") };
-
-            for (int i = 0; i < approvals.Count; i++)
-            {
-                stack.Add(BuildApprovalRow(approvals[i], i < approvals.Count - 1));
-            }
-
-            if (approvals.Count == 0)
-            {
-                stack.Add(BuildEmptyRow("Nothing is waiting on you right now."));
-            }
-
-            FillCard(approvalsCard, stack, "Open the requests queue");
+            int totalMinutes = (int)Math.Round(hours * 60);
+            int h = totalMinutes / 60;
+            int m = totalMinutes % 60;
+            return h > 0 ? h + "h " + m + "m" : m + "m";
         }
 
-        private void RenderActivity(List<ActivityItem> activity)
+        private void RenderTasks(List<PulseTask> activeTasks)
         {
-            var stack = new List<Control> { BuildCardHeader("Recent activity") };
+            var stack = new List<Control> { BuildCardHeader("My tasks") };
 
-            for (int i = 0; i < activity.Count; i++)
+            int shown = Math.Min(activeTasks.Count, 5);
+            for (int i = 0; i < shown; i++)
             {
-                stack.Add(BuildActivityRow(activity[i], i < activity.Count - 1));
+                stack.Add(BuildTaskRow(activeTasks[i], i < shown - 1));
             }
 
-            if (activity.Count == 0)
+            if (activeTasks.Count == 0)
             {
-                stack.Add(BuildEmptyRow("No activity in the last seven days."));
+                stack.Add(BuildEmptyRow("No active or overdue tasks — nice work."));
             }
 
-            FillCard(activityCard, stack, null);
+            FillCard(tasksCard, stack, "Open time tracker", (s, e) => OnOpenTrackerRequested());
+        }
+
+        private void RenderStatus(Performance perf)
+        {
+            var stack = new List<Control> { BuildCardHeader("Your status") };
+
+            var scoreBig = new Label
+            {
+                AutoSize = false,
+                BackColor = RpvTheme.CardSurface,
+                Font = RpvTheme.FontDisplay,
+                ForeColor = perf != null ? ScoreColor(perf.score) : RpvTheme.Stone,
+                Height = 64,
+                Text = perf != null ? perf.score.ToString() : "—",
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            var scoreCaption = new Label
+            {
+                AutoSize = false,
+                BackColor = RpvTheme.CardSurface,
+                Font = RpvTheme.FontCaption,
+                ForeColor = RpvTheme.Stone,
+                Height = 22,
+                Text = "Performance score (out of 100)",
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            stack.Add(scoreBig);
+            stack.Add(scoreCaption);
+
+            string[] captions = { "Tasks done", "Overdue", "Unresolved", "Active concerns" };
+            string[] values = perf != null
+                ? new[]
+                {
+                    perf.tasks_done + " / " + perf.tasks_total,
+                    perf.overdue_tasks.ToString(),
+                    perf.unresolved_tasks.ToString(),
+                    perf.active_concerns.ToString()
+                }
+                : new[] { "—", "—", "—", "—" };
+
+            for (int i = 0; i < captions.Length; i++)
+            {
+                stack.Add(BuildStatusRow(captions[i], values[i]));
+            }
+
+            FillCard(statusCard, stack, null, null);
+        }
+
+        private static Panel BuildStatusRow(string caption, string value)
+        {
+            var row = new Panel { Height = 30, BackColor = RpvTheme.CardSurface };
+
+            var name = new Label
+            {
+                AutoSize = false,
+                BackColor = RpvTheme.CardSurface,
+                Font = RpvTheme.FontBody,
+                ForeColor = RpvTheme.Charcoal,
+                Dock = DockStyle.Left,
+                Width = 200,
+                Text = caption,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            var figure = new Label
+            {
+                AutoSize = false,
+                BackColor = RpvTheme.CardSurface,
+                Font = RpvTheme.FontBodyMedium,
+                ForeColor = RpvTheme.HeadingText,
+                Dock = DockStyle.Fill,
+                Text = value,
+                TextAlign = ContentAlignment.MiddleRight
+            };
+
+            row.Controls.Add(figure);
+            row.Controls.Add(name);
+            return row;
+        }
+
+        private static Color ScoreColor(int score)
+        {
+            if (score >= 80)
+            {
+                return RpvTheme.Success;
+            }
+            return score >= 60 ? RpvTheme.Warning : RpvTheme.Danger;
+        }
+
+        /// <summary>Buckets local tracking history into the last 7 calendar days, oldest first.</summary>
+        private void RenderActivityChart()
+        {
+            List<TaskHistoryEntry> entries = TaskHistoryStore.LoadAll();
+            if (entries.Count == 0)
+            {
+                activityChart.SetData(new ActivityBarChart.Bucket[0]);
+                return;
+            }
+
+            var buckets = new List<ActivityBarChart.Bucket>();
+            for (int i = 6; i >= 0; i--)
+            {
+                DateTime day = DateTime.Today.AddDays(-i);
+                List<TaskHistoryEntry> dayEntries = entries.Where(x => x.StartedAt.Date == day).ToList();
+                int percent = dayEntries.Count > 0 ? (int)Math.Round(dayEntries.Average(x => x.ActivePercent)) : 0;
+
+                buckets.Add(new ActivityBarChart.Bucket
+                {
+                    Label = i == 0 ? "Today" : day.ToString("ddd"),
+                    Percent = percent
+                });
+            }
+
+            activityChart.SetData(buckets);
         }
 
         /// <summary>
         /// Docked children stack in reverse z-order, so the list is added back to front
         /// to end up reading top to bottom.
         /// </summary>
-        private static void FillCard(CardPanel card, List<Control> stack, string footerText)
+        private static void FillCard(CardPanel card, List<Control> stack, string footerText, EventHandler footerClick)
         {
             card.SuspendLayout();
             card.Controls.Clear();
@@ -270,6 +444,10 @@ namespace RPV_Tracker.Pages
                     Dock = DockStyle.Bottom,
                     Height = 30
                 };
+                if (footerClick != null)
+                {
+                    footer.Click += footerClick;
+                }
                 card.Controls.Add(footer);
             }
 
@@ -287,9 +465,9 @@ namespace RPV_Tracker.Pages
             return new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontH3,
-                ForeColor = RpvTheme.Midnight,
+                ForeColor = RpvTheme.HeadingText,
                 Height = 34,
                 Text = text,
                 TextAlign = ContentAlignment.MiddleLeft
@@ -301,7 +479,7 @@ namespace RPV_Tracker.Pages
             return new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontBody,
                 ForeColor = RpvTheme.Stone,
                 Height = RowHeight,
@@ -310,57 +488,35 @@ namespace RPV_Tracker.Pages
             };
         }
 
-        private static Panel BuildApprovalRow(ApprovalItem item, bool withDivider)
+        private static Panel BuildTaskRow(PulseTask task, bool withDivider)
         {
             var row = NewRow(withDivider);
 
-            Label title = RowTitle(item.Title);
-            Label meta = RowMeta(item.Requester + " · " + item.Meta);
-            var pill = new StatusPill { Status = item.Status, Top = 18 };
+            Label title = RowTitle("#" + task.id + "  ·  " + task.title);
+            Label meta = RowMeta(string.IsNullOrEmpty(task.due_at) ? "No deadline" : "Due " + task.due_at);
 
-            row.Controls.Add(title);
-            row.Controls.Add(meta);
-            row.Controls.Add(pill);
-
-            row.Resize += (s, e) =>
-            {
-                pill.Left = Math.Max(0, row.ClientSize.Width - pill.Width);
-                int textWidth = Math.Max(40, pill.Left - RpvTheme.Space3);
-                title.Width = textWidth;
-                meta.Width = textWidth;
-            };
-
-            return row;
-        }
-
-        private static Panel BuildActivityRow(ActivityItem item, bool withDivider)
-        {
-            var row = NewRow(withDivider);
-
-            Label title = RowTitle(item.Title);
-            Label meta = RowMeta(item.Meta);
-
-            var time = new Label
+            bool overdue = task.DaysLate > 0;
+            var status = new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
-                Font = RpvTheme.FontCaption,
-                ForeColor = RpvTheme.Stone,
-                Height = 20,
-                Top = 6,
-                Width = 90,
-                TextAlign = ContentAlignment.MiddleRight,
-                Text = item.TimeAgo
+                BackColor = RpvTheme.CardSurface,
+                Font = RpvTheme.FontMicro,
+                ForeColor = overdue ? RpvTheme.Danger : RpvTheme.Steel,
+                Height = RowHeight,
+                Top = 0,
+                Width = 100,
+                Text = overdue ? task.DaysLate + (task.DaysLate == 1 ? " day late" : " days late") : "Active",
+                TextAlign = ContentAlignment.MiddleRight
             };
 
             row.Controls.Add(title);
             row.Controls.Add(meta);
-            row.Controls.Add(time);
+            row.Controls.Add(status);
 
             row.Resize += (s, e) =>
             {
-                time.Left = Math.Max(0, row.ClientSize.Width - time.Width);
-                int textWidth = Math.Max(40, time.Left - RpvTheme.Space3);
+                status.Left = Math.Max(0, row.ClientSize.Width - status.Width);
+                int textWidth = Math.Max(40, status.Left - RpvTheme.Space3);
                 title.Width = textWidth;
                 meta.Width = textWidth;
             };
@@ -373,7 +529,7 @@ namespace RPV_Tracker.Pages
             var row = new Panel
             {
                 Height = RowHeight,
-                BackColor = RpvTheme.White
+                BackColor = RpvTheme.CardSurface
             };
 
             if (withDivider)
@@ -395,13 +551,15 @@ namespace RPV_Tracker.Pages
             return new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontBodyMedium,
                 ForeColor = RpvTheme.Charcoal,
                 Height = 20,
                 Top = 8,
                 Left = 0,
                 Text = text,
+                UseMnemonic = false,
+                AutoEllipsis = true,
                 TextAlign = ContentAlignment.MiddleLeft
             };
         }
@@ -411,7 +569,7 @@ namespace RPV_Tracker.Pages
             return new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontCaption,
                 ForeColor = RpvTheme.Stone,
                 Height = 18,

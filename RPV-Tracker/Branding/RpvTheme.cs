@@ -24,36 +24,76 @@ namespace RPV_Tracker.Branding
     /// </summary>
     internal static class RpvTheme
     {
-        // ---------------------------------------------------------------- colors
+        // ---------------------------------------------------------------- theme mode
 
-        // Primary palette — the foundation
-        public static readonly Color Midnight = Color.FromArgb(0x0D, 0x1B, 0x2A);
-        public static readonly Color Slate = Color.FromArgb(0x1C, 0x3A, 0x52);
-        public static readonly Color Steel = Color.FromArgb(0x2E, 0x5F, 0x80);
-        public static readonly Color Horizon = Color.FromArgb(0x4A, 0x90, 0xB8);
+        /// <summary>
+        /// Raised after <see cref="ApplyMode"/> reassigns every mutable token below.
+        /// Windows already on screen don't repaint themselves automatically — a listener
+        /// must re-skin its own literal colour assignments and, for pages built once in a
+        /// constructor, rebuild the page. See MainForm's subscription for the pattern.
+        /// </summary>
+        public static event EventHandler ThemeChanged;
 
-        // Accent palette — the human warmth
+        public static bool IsDarkMode { get; private set; }
+
+        // ---------------------------------------------------------- fixed brand colors
+        //
+        // These never change with theme. They're either the brand's dark chrome surface
+        // (nav bar, the login screen's brand panel) or a mark/text that always sits on
+        // that fixed dark surface or on the Terracotta accent — flipping them with the
+        // page theme would make them illegible rather than adaptive.
+
+        /// <summary>The brand's dark chrome surface — nav bar, login brand panel. Was "Midnight".</summary>
+        public static readonly Color BrandSurface = Color.FromArgb(0x0D, 0x1B, 0x2A);
+
+        /// <summary>Text/marks that sit on BrandSurface or an accent fill and must stay light. Was "White".</summary>
+        public static readonly Color OnAccent = Color.FromArgb(0xFF, 0xFF, 0xFF);
+
         public static readonly Color Terracotta = Color.FromArgb(0xC4, 0x62, 0x2D);
         public static readonly Color Ember = Color.FromArgb(0xE0, 0x7B, 0x45);
         public static readonly Color Sand = Color.FromArgb(0xF0, 0xC8, 0x9A);
-
-        // Neutral palette — the canvas
-        public static readonly Color Cream = Color.FromArgb(0xFA, 0xF7, 0xF2);
-        public static readonly Color Mist = Color.FromArgb(0xEE, 0xF2, 0xF5);
-        public static readonly Color Stone = Color.FromArgb(0x8F, 0xA3, 0xB1);
-        public static readonly Color Charcoal = Color.FromArgb(0x2C, 0x3E, 0x4A);
-        public static readonly Color White = Color.FromArgb(0xFF, 0xFF, 0xFF);
-
-        // Semantic / functional
         public static readonly Color ActionHover = Color.FromArgb(0xA8, 0x52, 0x1F);
-        public static readonly Color Success = Color.FromArgb(0x2D, 0x7A, 0x4F);
-        public static readonly Color Warning = Color.FromArgb(0xB8, 0x73, 0x33);
-        public static readonly Color Danger = Color.FromArgb(0xB8, 0x32, 0x32);
+        public static readonly Color Horizon = Color.FromArgb(0x4A, 0x90, 0xB8);
 
-        // Borders. GDI+ has no alpha compositing for 1px hairlines that reads well,
-        // so rgba(44,62,74,0.12) is pre-flattened over white.
-        public static readonly Color Border = Color.FromArgb(0xE6, 0xE8, 0xE9);
-        public static readonly Color InputBorder = Color.FromArgb(0xD0, 0xDB, 0xE3);
+        /// <summary>Muted secondary text. Reads clearly on light content, dark content, and BrandSurface alike.</summary>
+        public static readonly Color Stone = Color.FromArgb(0x8F, 0xA3, 0xB1);
+
+        // ------------------------------------------------------- theme-mutable colors
+        //
+        // Everything below flips between the light and dark palette in ApplyMode. Pages
+        // and controls read these fields directly, the same way they always have — only
+        // the value behind the name now depends on the active mode.
+
+        /// <summary>Page background.</summary>
+        public static Color Cream;
+
+        /// <summary>Card, input, and row fill. Literal white in light mode, elevated dark slate in dark mode. Was "White" used as a surface.</summary>
+        public static Color CardSurface;
+
+        /// <summary>Secondary fill — stat tiles, placeholder art.</summary>
+        public static Color Mist;
+
+        /// <summary>Body text.</summary>
+        public static Color Charcoal;
+
+        /// <summary>Heading and headline-figure text on a page or card surface. Was "Midnight" used as text.</summary>
+        public static Color HeadingText;
+
+        /// <summary>Hairline divider, 1px.</summary>
+        public static Color Border;
+
+        /// <summary>Input field resting border.</summary>
+        public static Color InputBorder;
+
+        /// <summary>Secondary-button text/border and similar mid-emphasis content accents.</summary>
+        public static Color Slate;
+
+        /// <summary>Tertiary-button text, focus rings, low-emphasis content accents.</summary>
+        public static Color Steel;
+
+        public static Color Success;
+        public static Color Warning;
+        public static Color Danger;
 
         // --------------------------------------------------------------- spacing
 
@@ -104,6 +144,55 @@ namespace RPV_Tracker.Branding
             string semibold = FirstInstalled(installed, "Inter SemiBold", "Inter Semi Bold", "Segoe UI Semibold");
             HeadingFamily = semibold ?? BaseFamily;
             HeadingNeedsBoldStyle = semibold == null;
+
+            ApplyMode(false);
+        }
+
+        /// <summary>
+        /// Reassigns every theme-mutable token above to the light or dark palette and
+        /// raises <see cref="ThemeChanged"/>. Controls already on screen keep whatever
+        /// colour they captured at construction time — callers must re-skin or rebuild.
+        /// </summary>
+        public static void ApplyMode(bool dark)
+        {
+            IsDarkMode = dark;
+
+            if (dark)
+            {
+                Cream = Color.FromArgb(0x11, 0x18, 0x1F);
+                CardSurface = Color.FromArgb(0x1B, 0x24, 0x2D);
+                Mist = Color.FromArgb(0x23, 0x2E, 0x39);
+                Charcoal = Color.FromArgb(0xD3, 0xDA, 0xE0);
+                HeadingText = Color.FromArgb(0xF3, 0xF6, 0xF8);
+                Border = Color.FromArgb(0x2B, 0x36, 0x42);
+                InputBorder = Color.FromArgb(0x3A, 0x4A, 0x59);
+                Slate = Color.FromArgb(0xA9, 0xC7, 0xDE);
+                Steel = Color.FromArgb(0x7F, 0xB3, 0xD9);
+                Success = Color.FromArgb(0x4F, 0xBE, 0x82);
+                Warning = Color.FromArgb(0xE0, 0xA4, 0x58);
+                Danger = Color.FromArgb(0xE5, 0x6B, 0x6B);
+            }
+            else
+            {
+                Cream = Color.FromArgb(0xFA, 0xF7, 0xF2);
+                CardSurface = Color.FromArgb(0xFF, 0xFF, 0xFF);
+                Mist = Color.FromArgb(0xEE, 0xF2, 0xF5);
+                Charcoal = Color.FromArgb(0x2C, 0x3E, 0x4A);
+                HeadingText = Color.FromArgb(0x0D, 0x1B, 0x2A);
+                Border = Color.FromArgb(0xE6, 0xE8, 0xE9);
+                InputBorder = Color.FromArgb(0xD0, 0xDB, 0xE3);
+                Slate = Color.FromArgb(0x1C, 0x3A, 0x52);
+                Steel = Color.FromArgb(0x2E, 0x5F, 0x80);
+                Success = Color.FromArgb(0x2D, 0x7A, 0x4F);
+                Warning = Color.FromArgb(0xB8, 0x73, 0x33);
+                Danger = Color.FromArgb(0xB8, 0x32, 0x32);
+            }
+
+            EventHandler handler = ThemeChanged;
+            if (handler != null)
+            {
+                handler(null, EventArgs.Empty);
+            }
         }
 
         private static string FirstInstalled(string[] installed, params string[] candidates)

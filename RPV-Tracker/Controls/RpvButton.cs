@@ -120,7 +120,7 @@ namespace RPV_Tracker.Controls
                     {
                         fill = RpvTheme.Terracotta;
                     }
-                    text = RpvTheme.White;
+                    text = RpvTheme.OnAccent;
                     break;
             }
 

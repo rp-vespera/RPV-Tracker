@@ -84,5 +84,8 @@ namespace RPV_Tracker.Domains.TimeTracking.Models
         public long TotalKeys { get; set; }
         public long TotalClicks { get; set; }
         public int ActivePercent { get; set; }
+
+        /// <summary>True when the operator flagged this session as overtime (OT) when starting it.</summary>
+        public bool IsOvertime { get; set; }
     }
 }

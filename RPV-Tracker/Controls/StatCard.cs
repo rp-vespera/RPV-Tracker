@@ -64,7 +64,7 @@ namespace RPV_Tracker.Controls
 
             TextRenderer.DrawText(g, value, RpvTheme.FontStatNumber,
                 new Point(RpvTheme.Space5 - 2, 42),
-                isAccent ? RpvTheme.Terracotta : RpvTheme.Midnight,
+                isAccent ? RpvTheme.Terracotta : RpvTheme.HeadingText,
                 TextFormatFlags.NoPadding);
         }
     }

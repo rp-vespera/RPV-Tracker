@@ -74,7 +74,7 @@ namespace RPV_Tracker.Controls
             }
             else if (hovered)
             {
-                color = RpvTheme.White;
+                color = RpvTheme.OnAccent;
             }
             else
             {

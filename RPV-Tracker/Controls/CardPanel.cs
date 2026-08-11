@@ -13,7 +13,7 @@ namespace RPV_Tracker.Controls
         /// <summary>Pixels reserved at the bottom-right for the shadow.</summary>
         private const int ShadowInset = 2;
 
-        private Color surface = RpvTheme.White;
+        private Color surface = RpvTheme.CardSurface;
         private int cornerRadius = RpvTheme.RadiusLg;
         private bool drawBorder = true;
 
@@ -67,7 +67,7 @@ namespace RPV_Tracker.Controls
             {
                 var shadowRect = new Rectangle(card.X + 1, card.Y + i, card.Width, card.Height);
                 using (var path = RpvTheme.RoundedRect(shadowRect, cornerRadius))
-                using (var brush = new SolidBrush(Color.FromArgb(10, RpvTheme.Midnight)))
+                using (var brush = new SolidBrush(Color.FromArgb(10, RpvTheme.BrandSurface)))
                 {
                     g.FillPath(brush, path);
                 }

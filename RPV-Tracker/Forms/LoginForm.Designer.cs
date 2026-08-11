@@ -47,7 +47,7 @@ namespace RPV_Tracker.Forms
             this.brandLogo.PointSize = 26F;
             this.brandLogo.Size = new System.Drawing.Size(140, 46);
             this.brandLogo.TabIndex = 0;
-            this.brandLogo.WordmarkColor = RpvTheme.White;
+            this.brandLogo.WordmarkColor = RpvTheme.OnAccent;
             //
             // brandWordmark
             //
@@ -68,7 +68,7 @@ namespace RPV_Tracker.Forms
             this.brandHeadline.AutoSize = false;
             this.brandHeadline.BackColor = System.Drawing.Color.Transparent;
             this.brandHeadline.Font = RpvTheme.FontH2;
-            this.brandHeadline.ForeColor = RpvTheme.White;
+            this.brandHeadline.ForeColor = RpvTheme.OnAccent;
             this.brandHeadline.Location = new System.Drawing.Point(48, 212);
             this.brandHeadline.Name = "brandHeadline";
             this.brandHeadline.Size = new System.Drawing.Size(284, 110);
@@ -97,7 +97,7 @@ namespace RPV_Tracker.Forms
             //
             // brandPanel
             //
-            this.brandPanel.BackColor = RpvTheme.Midnight;
+            this.brandPanel.BackColor = RpvTheme.BrandSurface;
             this.brandPanel.Controls.Add(this.brandLogo);
             this.brandPanel.Controls.Add(this.brandWordmark);
             this.brandPanel.Controls.Add(this.brandHeadline);
@@ -114,7 +114,7 @@ namespace RPV_Tracker.Forms
             this.titleLabel.AutoSize = false;
             this.titleLabel.BackColor = System.Drawing.Color.Transparent;
             this.titleLabel.Font = RpvTheme.FontH1;
-            this.titleLabel.ForeColor = RpvTheme.Midnight;
+            this.titleLabel.ForeColor = RpvTheme.HeadingText;
             this.titleLabel.Location = new System.Drawing.Point(80, 108);
             this.titleLabel.Name = "titleLabel";
             this.titleLabel.Size = new System.Drawing.Size(380, 38);

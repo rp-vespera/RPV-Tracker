@@ -23,7 +23,7 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
         private readonly InputMonitor monitor = new InputMonitor();
         private readonly Timer heartbeat = new Timer();
         private readonly List<ActivityInterval> intervals = new List<ActivityInterval>();
-        private readonly int intervalLength;
+        private int intervalLength;
 
         private bool tracking;
         private string sessionFolder;
@@ -31,6 +31,7 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
         private int sessionSeconds;
         private int? activeTaskId;
         private string activeTaskTitle;
+        private bool overtime;
 
         private DateTime intervalStart;
         private int intervalSeconds;
@@ -41,9 +42,22 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
 
         public TimeTrackingService()
         {
-            intervalLength = RpvConfig.TrackingIntervalSeconds;
+            intervalLength = RpvConfig.TrackingIntervalSecondsOverride ?? (AppSettings.ScreenshotIntervalMinutes * 60);
             heartbeat.Interval = 1000;
             heartbeat.Tick += OnHeartbeat;
+        }
+
+        /// <summary>
+        /// Applies a screenshot interval chosen on the Settings page. Ignored once tracking
+        /// has started — the interval that began the session sees it through to the end.
+        /// </summary>
+        public void SetIntervalMinutes(int minutes)
+        {
+            if (tracking || RpvConfig.TrackingIntervalSecondsOverride.HasValue)
+            {
+                return;
+            }
+            intervalLength = minutes * 60;
         }
 
         /// <summary>Fired once per second while tracking, and once on start and stop.</summary>
@@ -78,12 +92,17 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
         /// <summary>Title of the task the current (or most recent) session is tracking.</summary>
         public string ActiveTaskTitle { get { return activeTaskTitle; } }
 
+        /// <summary>True when the current (or most recent) session was flagged as overtime at start.</summary>
+        public bool IsOvertimeSession { get { return overtime; } }
+
         /// <summary>
         /// Starts a session against a task. The tracker gates on the task id (every task has
         /// one), so the caller passes the selected task's id and title; both are recorded with
-        /// the session and the id is folded into the screenshot folder name.
+        /// the session and the id is folded into the screenshot folder name. <paramref name="isOvertime"/>
+        /// carries the operator's own OT request — set when they started outside the configured
+        /// work schedule and chose to flag it — through to the session summary and history.
         /// </summary>
-        public void Start(int? taskId = null, string taskTitle = null)
+        public void Start(int? taskId = null, string taskTitle = null, bool isOvertime = false)
         {
             if (tracking)
             {
@@ -92,6 +111,7 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
 
             activeTaskId = taskId;
             activeTaskTitle = taskTitle;
+            overtime = isOvertime;
 
             DateTime now = DateTime.Now;
             sessionStart = now;
@@ -170,7 +190,8 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
                 ScreenshotCount = shots,
                 TotalKeys = monitor.KeyCount,
                 TotalClicks = monitor.ClickCount,
-                ActivePercent = totalSeconds > 0 ? (int)Math.Round(activeSeconds * 100.0 / totalSeconds) : 0
+                ActivePercent = totalSeconds > 0 ? (int)Math.Round(activeSeconds * 100.0 / totalSeconds) : 0,
+                IsOvertime = overtime
             };
         }
 
@@ -219,7 +240,7 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
 
             try
             {
-                interval.ScreenshotPath = ScreenshotService.Capture(sessionFolder);
+                interval.ScreenshotPath = ScreenshotService.Capture(sessionFolder, AppSettings.ResolveCaptureBounds());
             }
             catch (Exception ex)
             {

@@ -39,11 +39,11 @@ namespace RPV_Tracker.Forms
             this.navLogo.PointSize = 15F;
             this.navLogo.Size = new System.Drawing.Size(80, 28);
             this.navLogo.TabIndex = 0;
-            this.navLogo.WordmarkColor = RpvTheme.White;
+            this.navLogo.WordmarkColor = RpvTheme.OnAccent;
             //
             // navLinksHost
             //
-            this.navLinksHost.BackColor = RpvTheme.Midnight;
+            this.navLinksHost.BackColor = RpvTheme.BrandSurface;
             this.navLinksHost.Location = new System.Drawing.Point(120, 0);
             this.navLinksHost.Name = "navLinksHost";
             this.navLinksHost.Size = new System.Drawing.Size(620, 56);
@@ -52,7 +52,6 @@ namespace RPV_Tracker.Forms
             //
             // userMonogram
             //
-            this.userMonogram.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             this.userMonogram.Location = new System.Drawing.Point(878, 12);
             this.userMonogram.Name = "userMonogram";
             this.userMonogram.Size = new System.Drawing.Size(32, 32);
@@ -60,20 +59,19 @@ namespace RPV_Tracker.Forms
             //
             // userNameLabel
             //
-            this.userNameLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
+            this.userNameLabel.AutoEllipsis = true;
             this.userNameLabel.AutoSize = false;
-            this.userNameLabel.BackColor = RpvTheme.Midnight;
+            this.userNameLabel.BackColor = RpvTheme.BrandSurface;
             this.userNameLabel.Font = RpvTheme.FontBody;
-            this.userNameLabel.ForeColor = RpvTheme.White;
+            this.userNameLabel.ForeColor = RpvTheme.OnAccent;
             this.userNameLabel.Location = new System.Drawing.Point(918, 0);
             this.userNameLabel.Name = "userNameLabel";
-            this.userNameLabel.Size = new System.Drawing.Size(170, 56);
+            this.userNameLabel.Size = new System.Drawing.Size(140, 56);
             this.userNameLabel.TabIndex = 3;
             this.userNameLabel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             //
             // signOutLink
             //
-            this.signOutLink.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             this.signOutLink.Location = new System.Drawing.Point(1092, 0);
             this.signOutLink.Name = "signOutLink";
             this.signOutLink.Size = new System.Drawing.Size(84, 56);
@@ -83,9 +81,8 @@ namespace RPV_Tracker.Forms
             //
             // trackingIndicator
             //
-            this.trackingIndicator.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right;
             this.trackingIndicator.AutoSize = false;
-            this.trackingIndicator.BackColor = RpvTheme.Midnight;
+            this.trackingIndicator.BackColor = RpvTheme.BrandSurface;
             this.trackingIndicator.Font = RpvTheme.FontCaption;
             this.trackingIndicator.ForeColor = RpvTheme.Ember;
             this.trackingIndicator.Location = new System.Drawing.Point(752, 0);
@@ -98,7 +95,7 @@ namespace RPV_Tracker.Forms
             //
             // navBar
             //
-            this.navBar.BackColor = RpvTheme.Midnight;
+            this.navBar.BackColor = RpvTheme.BrandSurface;
             this.navBar.Controls.Add(this.navLogo);
             this.navBar.Controls.Add(this.navLinksHost);
             this.navBar.Controls.Add(this.trackingIndicator);
@@ -128,7 +125,7 @@ namespace RPV_Tracker.Forms
             this.ClientSize = new System.Drawing.Size(1200, 760);
             this.Controls.Add(this.contentPanel);
             this.Controls.Add(this.navBar);
-            this.MinimumSize = new System.Drawing.Size(940, 620);
+            this.MinimumSize = new System.Drawing.Size(980, 620);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "RPV Workforce";

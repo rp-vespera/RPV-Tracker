@@ -47,7 +47,8 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
                 screenshot_count = summary.ScreenshotCount,
                 keystrokes = summary.TotalKeys,
                 clicks = summary.TotalClicks,
-                active_percent = summary.ActivePercent
+                active_percent = summary.ActivePercent,
+                is_overtime = summary.IsOvertime
             };
 
             await TrackerApiClient

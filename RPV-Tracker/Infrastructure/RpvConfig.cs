@@ -50,11 +50,12 @@ namespace RPV_Tracker.Infrastructure
         }
 
         /// <summary>
-        /// How often the time tracker captures a screenshot and closes an activity interval.
-        /// Defaults to 20 minutes. Rpv.Tracking.IntervalSeconds, when &gt; 0, overrides the
-        /// minute value — handy for testing without waiting a full interval.
+        /// Explicit low-level override for the screenshot/activity interval, in seconds.
+        /// Set only for local testing, where waiting out a real user-facing interval
+        /// (5+ minutes) would be impractical. When absent, the interval instead comes from
+        /// whatever the user picked on the Settings page (<see cref="AppSettings.ScreenshotIntervalMinutes"/>).
         /// </summary>
-        public static int TrackingIntervalSeconds
+        public static int? TrackingIntervalSecondsOverride
         {
             get
             {
@@ -63,14 +64,7 @@ namespace RPV_Tracker.Infrastructure
                 {
                     return seconds;
                 }
-
-                int minutes;
-                if (int.TryParse(ConfigurationManager.AppSettings["Rpv.Tracking.IntervalMinutes"], out minutes) && minutes > 0)
-                {
-                    return minutes * 60;
-                }
-
-                return 20 * 60;
+                return null;
             }
         }
 

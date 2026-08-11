@@ -10,25 +10,26 @@ using RPV_Tracker.Domains.Pulse.Models;
 using RPV_Tracker.Domains.Pulse.Services;
 using RPV_Tracker.Domains.TimeTracking.Models;
 using RPV_Tracker.Domains.TimeTracking.Services;
+using RPV_Tracker.Infrastructure;
 
 namespace RPV_Tracker.Pages
 {
     /// <summary>
-    /// Time-tracker screen. Tracking is gated on a task from the Pulse service: pick a task
-    /// that isn't done or blocked and Start becomes available (the session is keyed to the
-    /// task's id). The page also shows the person's performance — score, overdue "lates",
-    /// and notices/tips.
+    /// Time-tracker screen. You start by pasting a task id (not a dropdown); the id is
+    /// validated against your active/overdue tasks, which are listed beside it for reference.
+    /// The page also shows performance — score, counts, notices, and an hour-by-hour
+    /// activity chart.
     /// </summary>
     internal class TimeTrackerPage : UserControl
     {
         private const int TitleHeight = 32;
         private const int SubtitleHeight = 40;
-        private const int ControlCardHeight = 182;
+        private const int ControlCardHeight = 206;
         private const int StatsHeight = 96;
-        private const int PerfRowHeight = 252;
-        private const int NoticesHeight = 128;
-        private const int BottomHeight = 248;
-        private const int LatesCap = 4;
+        private const int PerfRowHeight = 236;
+        private const int NoticesHeight = 120;
+        private const int BottomHeight = 240;
+        private const int ChartHeight = 220;
 
         private readonly TimeTrackingService service;
 
@@ -43,12 +44,15 @@ namespace RPV_Tracker.Pages
         private readonly Label statusDot;
         private readonly Label statusLabel;
         private readonly Label elapsedLabel;
-        private readonly Label subLine;               // gating reason (idle) or next-shot countdown (tracking)
-        private readonly Label taskCaption;
-        private readonly ComboBox taskSelector;
+        private readonly Label subLine;
+        private readonly RpvField taskIdField;
         private readonly RpvButton toggleButton;
+        private readonly CheckBox otCheckbox;
+        private readonly Label otNote;
         private readonly Panel progressTrack;
+        private readonly Timer scheduleTimer;
         private float progressFraction;
+        private bool otPreviouslyOffered;
 
         // tracker stats
         private readonly StatCard activityStat;
@@ -63,9 +67,11 @@ namespace RPV_Tracker.Pages
         private readonly Label[] countName = new Label[4];
         private readonly Label[] countValue = new Label[4];
 
-        // lates + notices
-        private readonly CardPanel latesCard;
-        private readonly Panel latesBody;
+        // active & overdue task list
+        private readonly CardPanel tasksCard;
+        private readonly Panel tasksBody;
+
+        // notices
         private readonly CardPanel noticesCard;
         private readonly Label noticesLabel;
 
@@ -77,10 +83,13 @@ namespace RPV_Tracker.Pages
         private readonly CardPanel historyCard;
         private readonly Panel historyBody;
 
+        // activity per hour
+        private readonly CardPanel activityChartCard;
+        private readonly ActivityBarChart activityChart;
+
         private List<PulseTask> tasks = new List<PulseTask>();
         private PulseTask selectedTask;
         private bool loading;
-        private bool populating;
         private string dataError;
 
         public TimeTrackerPage(TimeTrackingService trackingService)
@@ -92,7 +101,7 @@ namespace RPV_Tracker.Pages
             scrollHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = RpvTheme.Cream };
             content = new Panel { BackColor = RpvTheme.Cream };
 
-            titleLabel = MakeLabel(RpvTheme.FontH1, RpvTheme.Midnight, "Time tracker", TitleHeight);
+            titleLabel = MakeLabel(RpvTheme.FontH1, RpvTheme.HeadingText, "Time tracker", TitleHeight);
             refreshLink = new RpvButton { Text = "Refresh", Variant = RpvButtonVariant.Tertiary, Size = new Size(120, 28) };
             refreshLink.Click += async (s, e) => await LoadDataAsync();
             subtitleLabel = MakeLabel(RpvTheme.FontBody, RpvTheme.Stone, BuildDisclosure(), SubtitleHeight);
@@ -100,39 +109,55 @@ namespace RPV_Tracker.Pages
             // ---- control card ----
             controlCard = new CardPanel();
 
-            taskCaption = MakeCardLabel(RpvTheme.FontCaption, RpvTheme.Stone, "Tracking task", ContentAlignment.MiddleLeft);
-            taskSelector = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = RpvTheme.FontBody,
-                DisplayMember = "SelectorLabel",
-                FlatStyle = FlatStyle.Flat,
-                MaxDropDownItems = 12,
-                Enabled = false
-            };
-            taskSelector.SelectedIndexChanged += taskSelector_SelectedIndexChanged;
-
             statusDot = MakeCardLabel(new Font(RpvTheme.BaseFamily, 14f), RpvTheme.Stone, "●", ContentAlignment.MiddleLeft);
             statusLabel = MakeCardLabel(RpvTheme.FontBodyMedium, RpvTheme.Charcoal, "Not tracking", ContentAlignment.MiddleLeft);
             statusLabel.AutoEllipsis = true;
-            elapsedLabel = MakeCardLabel(RpvTheme.FontDisplay, RpvTheme.Midnight, "00:00:00", ContentAlignment.MiddleLeft);
+            elapsedLabel = MakeCardLabel(RpvTheme.FontDisplay, RpvTheme.HeadingText, "00:00:00", ContentAlignment.MiddleLeft);
             subLine = MakeCardLabel(RpvTheme.FontCaption, RpvTheme.Stone, string.Empty, ContentAlignment.MiddleLeft);
             subLine.AutoEllipsis = true;
 
-            toggleButton = new RpvButton { Text = "Start tracking", Variant = RpvButtonVariant.Primary, Size = new Size(170, 42), Enabled = false };
+            taskIdField = new RpvField
+            {
+                LabelText = "Task ID",
+                PlaceholderText = "Paste task ID, e.g. 203",
+                BackColor = RpvTheme.CardSurface
+            };
+            taskIdField.ValueChanged += (s, e) => { ResolveSelectedFromField(); UpdateForState(); };
+
+            toggleButton = new RpvButton { Text = "Start tracking", Variant = RpvButtonVariant.Primary, Size = new Size(220, 42), Enabled = false };
             toggleButton.Click += toggleButton_Click;
 
-            progressTrack = new Panel { BackColor = RpvTheme.White, Height = 6 };
+            otCheckbox = new CheckBox
+            {
+                Text = "This is overtime (OT)",
+                Font = RpvTheme.FontBodyMedium,
+                ForeColor = RpvTheme.Charcoal,
+                BackColor = RpvTheme.CardSurface,
+                FlatStyle = FlatStyle.Flat,
+                AutoSize = false,
+                Visible = false
+            };
+            otNote = MakeCardLabel(RpvTheme.FontCaption, RpvTheme.Warning, string.Empty, ContentAlignment.MiddleLeft);
+            otNote.Visible = false;
+
+            progressTrack = new Panel { BackColor = RpvTheme.CardSurface, Height = 6 };
             progressTrack.Paint += progressTrack_Paint;
 
-            controlCard.Controls.Add(taskCaption);
-            controlCard.Controls.Add(taskSelector);
             controlCard.Controls.Add(statusDot);
             controlCard.Controls.Add(statusLabel);
             controlCard.Controls.Add(elapsedLabel);
             controlCard.Controls.Add(subLine);
+            controlCard.Controls.Add(taskIdField);
             controlCard.Controls.Add(toggleButton);
+            controlCard.Controls.Add(otCheckbox);
+            controlCard.Controls.Add(otNote);
             controlCard.Controls.Add(progressTrack);
+
+            // Re-checks OT eligibility on a timer, not just on state changes, so the prompt
+            // still appears if the page is simply left open across the schedule boundary.
+            scheduleTimer = new Timer { Interval = 30000 };
+            scheduleTimer.Tick += (s, e) => UpdateForState();
+            scheduleTimer.Start();
 
             // ---- tracker stat row ----
             activityStat = new StatCard { Label = "Activity", Value = "0%", IsAccent = true };
@@ -144,7 +169,7 @@ namespace RPV_Tracker.Pages
             perfCard = new CardPanel();
             Label perfHeader = MakeCardHeader("Your status");
             perfHeader.Dock = DockStyle.Top;
-            scoreBig = MakeCardLabel(RpvTheme.FontDisplay, RpvTheme.Midnight, "—", ContentAlignment.MiddleLeft);
+            scoreBig = MakeCardLabel(RpvTheme.FontDisplay, RpvTheme.HeadingText, "—", ContentAlignment.MiddleLeft);
             scoreCaption = MakeCardLabel(RpvTheme.FontCaption, RpvTheme.Stone, "Performance score (out of 100)", ContentAlignment.MiddleLeft);
             perfCard.Controls.Add(scoreBig);
             perfCard.Controls.Add(scoreCaption);
@@ -153,19 +178,19 @@ namespace RPV_Tracker.Pages
             for (int i = 0; i < captions.Length; i++)
             {
                 countName[i] = MakeCardLabel(RpvTheme.FontBody, RpvTheme.Charcoal, captions[i], ContentAlignment.MiddleLeft);
-                countValue[i] = MakeCardLabel(RpvTheme.FontBodyMedium, RpvTheme.Midnight, "—", ContentAlignment.MiddleRight);
+                countValue[i] = MakeCardLabel(RpvTheme.FontBodyMedium, RpvTheme.HeadingText, "—", ContentAlignment.MiddleRight);
                 perfCard.Controls.Add(countName[i]);
                 perfCard.Controls.Add(countValue[i]);
             }
             perfCard.Controls.Add(perfHeader);
 
-            // ---- lates card ----
-            latesCard = new CardPanel();
-            Label latesHeader = MakeCardHeader("Running late & overdue");
-            latesHeader.Dock = DockStyle.Top;
-            latesBody = new Panel { Dock = DockStyle.Fill, BackColor = RpvTheme.White };
-            latesCard.Controls.Add(latesBody);
-            latesCard.Controls.Add(latesHeader);
+            // ---- active & overdue task list ----
+            tasksCard = new CardPanel();
+            Label tasksHeader = MakeCardHeader("Active & overdue tasks");
+            tasksHeader.Dock = DockStyle.Top;
+            tasksBody = new Panel { Dock = DockStyle.Fill, BackColor = RpvTheme.CardSurface, AutoScroll = true };
+            tasksCard.Controls.Add(tasksBody);
+            tasksCard.Controls.Add(tasksHeader);
 
             // ---- notices card ----
             noticesCard = new CardPanel();
@@ -174,7 +199,7 @@ namespace RPV_Tracker.Pages
             noticesLabel = new Label
             {
                 Dock = DockStyle.Fill,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontBody,
                 ForeColor = RpvTheme.Charcoal,
                 Text = string.Empty,
@@ -193,7 +218,7 @@ namespace RPV_Tracker.Pages
             {
                 Dock = DockStyle.Bottom,
                 Height = 20,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontCaption,
                 ForeColor = RpvTheme.Stone,
                 Text = "No screenshots captured yet.",
@@ -210,9 +235,17 @@ namespace RPV_Tracker.Pages
             historyCard = new CardPanel();
             Label historyHeader = MakeCardHeader("Interval history");
             historyHeader.Dock = DockStyle.Top;
-            historyBody = new Panel { Dock = DockStyle.Fill, BackColor = RpvTheme.White };
+            historyBody = new Panel { Dock = DockStyle.Fill, BackColor = RpvTheme.CardSurface };
             historyCard.Controls.Add(historyBody);
             historyCard.Controls.Add(historyHeader);
+
+            // ---- activity per hour ----
+            activityChartCard = new CardPanel();
+            Label activityChartHeader = MakeCardHeader("Activity per hour");
+            activityChartHeader.Dock = DockStyle.Top;
+            activityChart = new ActivityBarChart { Dock = DockStyle.Fill };
+            activityChartCard.Controls.Add(activityChart);
+            activityChartCard.Controls.Add(activityChartHeader);
 
             content.Controls.Add(titleLabel);
             content.Controls.Add(refreshLink);
@@ -223,10 +256,11 @@ namespace RPV_Tracker.Pages
             content.Controls.Add(clicksStat);
             content.Controls.Add(shotsStat);
             content.Controls.Add(perfCard);
-            content.Controls.Add(latesCard);
+            content.Controls.Add(tasksCard);
             content.Controls.Add(noticesCard);
             content.Controls.Add(previewCard);
             content.Controls.Add(historyCard);
+            content.Controls.Add(activityChartCard);
 
             scrollHost.Controls.Add(content);
             Controls.Add(scrollHost);
@@ -238,7 +272,9 @@ namespace RPV_Tracker.Pages
             service.StateChanged += service_StateChanged;
 
             RenderPerformance(null);
+            RenderTaskList();
             RenderHistory();
+            RenderActivityChart();
             UpdateForState();
             LayoutContent();
         }
@@ -250,7 +286,7 @@ namespace RPV_Tracker.Pages
                 ? (seconds / 60) + (seconds == 60 ? " minute" : " minutes")
                 : seconds + " seconds";
 
-            return "Pick a task, then start. While tracking, RPV captures a screenshot every "
+            return "Paste a task id from the list to start. While tracking, RPV captures a screenshot every "
                 + every + " and counts keyboard and mouse activity — never which keys you press.";
         }
 
@@ -297,39 +333,17 @@ namespace RPV_Tracker.Pages
 
             loading = false;
             dataError = error;
-            PopulateTasks(loadedTasks ?? new List<PulseTask>());
-            RenderPerformance(perf);
-            UpdateForState();
-            LayoutContent();
-        }
-
-        private void PopulateTasks(List<PulseTask> loaded)
-        {
-            // Trackable tasks first (not done / not blocked), then active, then done.
-            tasks = loaded
+            tasks = (loadedTasks ?? new List<PulseTask>())
                 .OrderByDescending(t => t.CanTrack)
+                .ThenByDescending(t => t.DaysLate)
                 .ThenByDescending(t => t.active)
-                .ThenBy(t => t.IsDone)
-                .ThenBy(t => t.due_at ?? "9999")
                 .ToList();
 
-            populating = true;
-            taskSelector.BeginUpdate();
-            taskSelector.Items.Clear();
-            foreach (PulseTask task in tasks)
-            {
-                taskSelector.Items.Add(task);
-            }
-            taskSelector.EndUpdate();
-
-            int defaultIndex = tasks.FindIndex(t => t.CanTrack);
-            if (defaultIndex < 0 && tasks.Count > 0)
-            {
-                defaultIndex = 0;
-            }
-            taskSelector.SelectedIndex = defaultIndex;
-            selectedTask = defaultIndex >= 0 ? tasks[defaultIndex] : null;
-            populating = false;
+            RenderTaskList();
+            RenderPerformance(perf);
+            ResolveSelectedFromField();
+            UpdateForState();
+            LayoutContent();
         }
 
         // --------------------------------------------------------------- service events
@@ -364,6 +378,7 @@ namespace RPV_Tracker.Pages
                 ShowPreview(interval.ScreenshotPath);
             }
             RenderHistory();
+            RenderActivityChart();
         }
 
         private void service_StateChanged(object sender, EventArgs e)
@@ -372,16 +387,6 @@ namespace RPV_Tracker.Pages
         }
 
         // --------------------------------------------------------------- user actions
-
-        private void taskSelector_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            if (populating)
-            {
-                return;
-            }
-            selectedTask = taskSelector.SelectedItem as PulseTask;
-            UpdateForState();
-        }
 
         private void toggleButton_Click(object sender, EventArgs e)
         {
@@ -397,7 +402,7 @@ namespace RPV_Tracker.Pages
                 return;
             }
 
-            service.Start(selectedTask.id, selectedTask.title);
+            service.Start(selectedTask.id, selectedTask.title, otCheckbox.Visible && otCheckbox.Checked);
         }
 
         private void openFolderButton_Click(object sender, EventArgs e)
@@ -409,12 +414,23 @@ namespace RPV_Tracker.Pages
             }
         }
 
+        /// <summary>Digits typed/pasted into the Task ID field, or null if none.</summary>
+        private int? EnteredTaskId()
+        {
+            string raw = taskIdField.Value ?? string.Empty;
+            string digits = new string(raw.Where(char.IsDigit).ToArray());
+            int id;
+            return int.TryParse(digits, out id) ? (int?)id : null;
+        }
+
+        private void ResolveSelectedFromField()
+        {
+            int? id = EnteredTaskId();
+            selectedTask = id.HasValue ? tasks.FirstOrDefault(t => t.id == id.Value) : null;
+        }
+
         // --------------------------------------------------------------- gating
 
-        /// <summary>
-        /// The tracker's rules: a task must be selected and be neither done nor blocked.
-        /// Tracking is keyed to the task's id. <paramref name="reason"/> explains any block.
-        /// </summary>
         private bool CanStart(out string reason)
         {
             if (loading)
@@ -427,29 +443,31 @@ namespace RPV_Tracker.Pages
                 reason = "Couldn't load your tasks: " + dataError;
                 return false;
             }
-            if (tasks.Count == 0)
+
+            int? id = EnteredTaskId();
+            if (!id.HasValue)
             {
-                reason = "You have no tasks to track.";
+                reason = "Paste a task id from the list to start.";
                 return false;
             }
             if (selectedTask == null)
             {
-                reason = "Select a task to start tracking.";
+                reason = "No task found with id #" + id.Value + ".";
                 return false;
             }
             if (selectedTask.IsBlocked)
             {
                 string why = string.IsNullOrWhiteSpace(selectedTask.blocked_reason) ? "see the task details" : selectedTask.blocked_reason;
-                reason = "This task is blocked — " + why + ".";
+                reason = "Task #" + id.Value + " is blocked — " + why + ".";
                 return false;
             }
             if (selectedTask.IsDone)
             {
-                reason = "This task is already done — pick an active task to track.";
+                reason = "Task #" + id.Value + " is already done — pick an active task.";
                 return false;
             }
 
-            reason = "Ready to track Task #" + selectedTask.id + " · " + selectedTask.title;
+            reason = "Ready to track #" + selectedTask.id + " · " + selectedTask.title;
             return true;
         }
 
@@ -459,18 +477,22 @@ namespace RPV_Tracker.Pages
         {
             bool on = service.IsTracking;
 
-            taskSelector.Enabled = !on && !loading && tasks.Count > 0;
+            taskIdField.Enabled = !on && !loading;
             refreshLink.Enabled = !on && !loading;
 
             if (on)
             {
                 statusDot.ForeColor = RpvTheme.Danger;
-                string task = service.ActiveTaskId.HasValue ? "Task #" + service.ActiveTaskId + " · " : string.Empty;
-                statusLabel.Text = "Tracking  ·  " + task + (service.ActiveTaskTitle ?? string.Empty);
+                string task = service.ActiveTaskId.HasValue ? "#" + service.ActiveTaskId + " · " : string.Empty;
+                string otTag = service.IsOvertimeSession ? "  ·  OT" : string.Empty;
+                statusLabel.Text = "Tracking  ·  " + task + (service.ActiveTaskTitle ?? string.Empty) + otTag;
                 toggleButton.Text = "Stop tracking";
                 toggleButton.Variant = RpvButtonVariant.Secondary;
                 toggleButton.Enabled = true;
                 openFolderButton.Enabled = !string.IsNullOrEmpty(service.SessionFolder);
+                taskIdField.HasError = false;
+                otCheckbox.Visible = false;
+                otNote.Visible = false;
                 return;
             }
 
@@ -483,7 +505,31 @@ namespace RPV_Tracker.Pages
             bool canStart = CanStart(out reason);
             toggleButton.Enabled = canStart;
             subLine.Text = reason;
-            subLine.ForeColor = canStart ? RpvTheme.Stone : (dataError != null ? RpvTheme.Danger : RpvTheme.Warning);
+            subLine.ForeColor = canStart ? RpvTheme.Steel : (dataError != null ? RpvTheme.Danger : RpvTheme.Warning);
+
+            // Red field border only once something invalid has actually been entered.
+            taskIdField.HasError = !canStart && EnteredTaskId().HasValue && dataError == null;
+
+            // Starting outside the configured work schedule offers an OT request — checked
+            // by default the moment it appears, but the operator can uncheck it before starting.
+            bool offerOt = AppSettings.IsOutsideSchedule(DateTime.Now);
+            otCheckbox.Visible = offerOt;
+            otNote.Visible = offerOt;
+            if (offerOt)
+            {
+                if (!otPreviouslyOffered)
+                {
+                    otCheckbox.Checked = true;
+                }
+                otNote.Text = "Outside your scheduled hours (" + FormatTimeOfDay(AppSettings.WorkScheduleStart)
+                    + " – " + FormatTimeOfDay(AppSettings.WorkScheduleEnd) + ") — check to request overtime.";
+            }
+            otPreviouslyOffered = offerOt;
+        }
+
+        private static string FormatTimeOfDay(TimeSpan time)
+        {
+            return DateTime.Today.Add(time).ToString("h:mm tt");
         }
 
         private void RenderPerformance(Performance perf)
@@ -496,7 +542,6 @@ namespace RPV_Tracker.Pages
                 {
                     countValue[i].Text = "—";
                 }
-                RenderLates(null);
                 noticesLabel.Text = dataError != null ? "Performance couldn't be loaded." : "No notices right now.";
                 return;
             }
@@ -508,69 +553,55 @@ namespace RPV_Tracker.Pages
             countValue[2].Text = perf.unresolved_tasks.ToString();
             countValue[3].Text = perf.active_concerns.ToString();
 
-            RenderLates(perf.overdue_handling);
-
             noticesLabel.Text = (perf.tips != null && perf.tips.Count > 0)
                 ? string.Join("\n\n", perf.tips.Select(t => "•  " + t))
                 : "No notices right now — nice work.";
         }
 
-        private void RenderLates(List<OverdueItem> items)
+        /// <summary>Minimalist list of active (not-done) tasks, most overdue first.</summary>
+        private void RenderTaskList()
         {
-            latesBody.SuspendLayout();
-            latesBody.Controls.Clear();
+            tasksBody.SuspendLayout();
+            tasksBody.Controls.Clear();
 
-            List<OverdueItem> list = (items ?? new List<OverdueItem>())
-                .OrderBy(i => i.done)                 // unresolved (false) first
-                .ThenByDescending(i => i.days_late)
+            List<PulseTask> active = tasks
+                .Where(t => !t.IsDone)
+                .OrderByDescending(t => t.DaysLate)
+                .ThenByDescending(t => t.active)
                 .ToList();
 
-            if (list.Count == 0)
+            if (active.Count == 0)
             {
-                latesBody.Controls.Add(new Label
+                tasksBody.Controls.Add(new Label
                 {
                     Dock = DockStyle.Top,
                     Height = 44,
-                    BackColor = RpvTheme.White,
+                    BackColor = RpvTheme.CardSurface,
                     Font = RpvTheme.FontBody,
                     ForeColor = RpvTheme.Stone,
-                    Text = dataError != null ? "Couldn't load overdue items." : "Nothing overdue — all caught up.",
+                    Text = dataError != null ? "Couldn't load tasks." : "No active or overdue tasks.",
                     TextAlign = ContentAlignment.MiddleLeft
                 });
-                latesBody.ResumeLayout();
+                tasksBody.ResumeLayout();
                 return;
             }
 
             var rows = new List<Control>();
-            int shown = Math.Min(list.Count, LatesCap);
-            for (int i = 0; i < shown; i++)
+            for (int i = 0; i < active.Count; i++)
             {
-                rows.Add(BuildLateRow(list[i], i < shown - 1));
+                rows.Add(BuildTaskRow(active[i], i < active.Count - 1));
             }
-            if (list.Count > LatesCap)
-            {
-                rows.Add(new Label
-                {
-                    Height = 24,
-                    BackColor = RpvTheme.White,
-                    Font = RpvTheme.FontCaption,
-                    ForeColor = RpvTheme.Stone,
-                    Text = "+ " + (list.Count - LatesCap) + " more",
-                    TextAlign = ContentAlignment.MiddleLeft
-                });
-            }
-
             for (int i = rows.Count - 1; i >= 0; i--)
             {
                 rows[i].Dock = DockStyle.Top;
-                latesBody.Controls.Add(rows[i]);
+                tasksBody.Controls.Add(rows[i]);
             }
-            latesBody.ResumeLayout();
+            tasksBody.ResumeLayout();
         }
 
-        private Panel BuildLateRow(OverdueItem item, bool withDivider)
+        private Panel BuildTaskRow(PulseTask task, bool withDivider)
         {
-            var row = new Panel { Height = 46, BackColor = RpvTheme.White };
+            var row = new Panel { Height = 52, BackColor = RpvTheme.CardSurface, Cursor = Cursors.Hand };
             if (withDivider)
             {
                 row.Paint += (s, e) =>
@@ -582,50 +613,75 @@ namespace RPV_Tracker.Pages
                 };
             }
 
-            var title = new Label
+            var idLabel = new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
+                Font = RpvTheme.FontBodyMedium,
+                ForeColor = RpvTheme.Steel,
+                Text = "#" + task.id,
+                Bounds = new Rectangle(0, 0, 64, 52),
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            var titleLabel = new Label
+            {
+                AutoSize = false,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontBodyMedium,
                 ForeColor = RpvTheme.Charcoal,
-                Text = item.title,
-                Bounds = new Rectangle(0, 6, 240, 20),
+                Text = task.title,
+                Bounds = new Rectangle(74, 8, 240, 20),
                 TextAlign = ContentAlignment.MiddleLeft,
                 UseMnemonic = false,
                 AutoEllipsis = true
             };
-            string meta = item.days_late + (item.days_late == 1 ? " day late" : " days late") + "  ·  " + item.updates + " update(s)";
             var metaLabel = new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontCaption,
                 ForeColor = RpvTheme.Stone,
-                Text = meta,
-                Bounds = new Rectangle(0, 26, 240, 16),
+                Text = string.IsNullOrEmpty(task.due_at) ? "No deadline" : "Due " + task.due_at,
+                Bounds = new Rectangle(74, 28, 240, 16),
                 TextAlign = ContentAlignment.MiddleLeft
             };
-            var status = new Label
+            bool overdue = task.DaysLate > 0;
+            var statusLabel = new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
-                Font = RpvTheme.FontBodyMedium,
-                ForeColor = item.done ? RpvTheme.Success : RpvTheme.Danger,
-                Text = item.done ? "Resolved" : "Overdue",
-                Bounds = new Rectangle(0, 6, 90, 34),
+                BackColor = RpvTheme.CardSurface,
+                Font = RpvTheme.FontMicro,
+                ForeColor = overdue ? RpvTheme.Danger : RpvTheme.Steel,
+                Text = overdue ? task.DaysLate + (task.DaysLate == 1 ? " day late" : " days late") : "Active",
+                Bounds = new Rectangle(0, 0, 96, 52),
                 TextAlign = ContentAlignment.MiddleRight
             };
 
-            row.Controls.Add(title);
+            row.Controls.Add(idLabel);
+            row.Controls.Add(titleLabel);
             row.Controls.Add(metaLabel);
-            row.Controls.Add(status);
+            row.Controls.Add(statusLabel);
+
             row.Resize += (s, e) =>
             {
-                status.Left = Math.Max(0, row.ClientSize.Width - status.Width);
-                int textWidth = Math.Max(60, status.Left - RpvTheme.Space3);
-                title.Width = textWidth;
+                statusLabel.Left = Math.Max(0, row.ClientSize.Width - statusLabel.Width);
+                int textWidth = Math.Max(60, statusLabel.Left - 74 - RpvTheme.Space3);
+                titleLabel.Width = textWidth;
                 metaLabel.Width = textWidth;
             };
+
+            // The whole row fills the Task ID field — a convenience on top of pasting.
+            EventHandler fill = (s, e) =>
+            {
+                taskIdField.Value = task.id.ToString();
+                taskIdField.Focus();
+            };
+            row.Click += fill;
+            foreach (Control child in row.Controls)
+            {
+                child.Cursor = Cursors.Hand;
+                child.Click += fill;
+            }
 
             return row;
         }
@@ -642,7 +698,7 @@ namespace RPV_Tracker.Pages
                 {
                     Dock = DockStyle.Top,
                     Height = 44,
-                    BackColor = RpvTheme.White,
+                    BackColor = RpvTheme.CardSurface,
                     Font = RpvTheme.FontBody,
                     ForeColor = RpvTheme.Stone,
                     Text = "Completed intervals will appear here.",
@@ -668,7 +724,7 @@ namespace RPV_Tracker.Pages
 
         private Panel BuildHistoryRow(ActivityInterval interval, bool withDivider)
         {
-            var row = new Panel { Height = 48, BackColor = RpvTheme.White };
+            var row = new Panel { Height = 48, BackColor = RpvTheme.CardSurface };
             if (withDivider)
             {
                 row.Paint += (s, e) =>
@@ -683,7 +739,7 @@ namespace RPV_Tracker.Pages
             var range = new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontBodyMedium,
                 ForeColor = RpvTheme.Charcoal,
                 Text = interval.TimeRange,
@@ -693,7 +749,7 @@ namespace RPV_Tracker.Pages
             var meta = new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontCaption,
                 ForeColor = RpvTheme.Stone,
                 Text = interval.KeyCount + " taps · " + interval.ClickCount + " clicks",
@@ -703,7 +759,7 @@ namespace RPV_Tracker.Pages
             var activity = new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontBodyMedium,
                 ForeColor = RpvTheme.Terracotta,
                 Text = interval.ActivityPercent + "%",
@@ -723,6 +779,46 @@ namespace RPV_Tracker.Pages
             };
 
             return row;
+        }
+
+        /// <summary>Buckets completed intervals by the hour they started and averages their activity %.</summary>
+        private void RenderActivityChart()
+        {
+            IList<ActivityInterval> all = service.Intervals;
+
+            var hourOrder = new List<int>();
+            var sums = new Dictionary<int, int>();
+            var counts = new Dictionary<int, int>();
+
+            foreach (ActivityInterval interval in all)
+            {
+                int hour = interval.StartedAt.Hour;
+                if (!sums.ContainsKey(hour))
+                {
+                    sums[hour] = 0;
+                    counts[hour] = 0;
+                    hourOrder.Add(hour);
+                }
+                sums[hour] += interval.ActivityPercent;
+                counts[hour]++;
+            }
+
+            var buckets = new List<ActivityBarChart.Bucket>();
+            foreach (int hour in hourOrder)
+            {
+                buckets.Add(new ActivityBarChart.Bucket
+                {
+                    Label = FormatHourLabel(hour),
+                    Percent = (int)Math.Round(sums[hour] / (double)counts[hour])
+                });
+            }
+
+            activityChart.SetData(buckets);
+        }
+
+        private static string FormatHourLabel(int hour)
+        {
+            return DateTime.Today.AddHours(hour).ToString("h tt");
         }
 
         private void ShowPreview(string path)
@@ -751,7 +847,7 @@ namespace RPV_Tracker.Pages
         private void progressTrack_Paint(object sender, PaintEventArgs e)
         {
             Graphics g = e.Graphics;
-            g.Clear(RpvTheme.White);
+            g.Clear(RpvTheme.CardSurface);
             RpvTheme.EnableSmoothing(g);
 
             var track = new Rectangle(0, 0, progressTrack.Width - 1, progressTrack.Height - 1);
@@ -808,10 +904,10 @@ namespace RPV_Tracker.Pages
             y += StatsHeight + RpvTheme.Space5;
             int gap = RpvTheme.Space4;
             int perfWidth = (int)((width - gap) * 0.40);
-            int latesWidth = width - gap - perfWidth;
+            int tasksWidth = width - gap - perfWidth;
             perfCard.SetBounds(0, y, perfWidth, PerfRowHeight);
             LayoutPerfCard(perfWidth);
-            latesCard.SetBounds(perfWidth + gap, y, latesWidth, PerfRowHeight);
+            tasksCard.SetBounds(perfWidth + gap, y, tasksWidth, PerfRowHeight);
 
             y += PerfRowHeight + gap;
             noticesCard.SetBounds(0, y, width, NoticesHeight);
@@ -822,23 +918,31 @@ namespace RPV_Tracker.Pages
             previewCard.SetBounds(0, y, previewWidth, BottomHeight);
             historyCard.SetBounds(previewWidth + gap, y, historyWidth, BottomHeight);
 
-            content.Height = y + BottomHeight;
+            y += BottomHeight + RpvTheme.Space5;
+            activityChartCard.SetBounds(0, y, width, ChartHeight);
+
+            content.Height = y + ChartHeight;
+
+            scrollHost.AutoScrollMinSize = new Size(0, content.Height);
         }
 
         private void LayoutControlCard(int width)
         {
             int pad = RpvTheme.Space5;
+            int colWidth = 240;
+            int colX = width - pad - colWidth;
 
-            // Full-width task selector at the top so long task titles are readable.
-            taskCaption.SetBounds(pad, 12, width - (pad * 2), 16);
-            taskSelector.SetBounds(pad, 32, width - (pad * 2), 26);
-            taskSelector.DropDownWidth = Math.Max(taskSelector.Width, 640);
+            statusDot.SetBounds(pad, 16, 18, 22);
+            statusLabel.SetBounds(pad + 22, 16, colX - pad - 30, 22);
+            elapsedLabel.SetBounds(pad - 2, 44, colX - pad - 20, 46);
+            subLine.SetBounds(pad, 100, colX - pad - 20, 20);
 
-            statusDot.SetBounds(pad, 74, 18, 22);
-            statusLabel.SetBounds(pad + 22, 74, width - (pad * 2) - 22, 22);
-            elapsedLabel.SetBounds(pad - 2, 98, width - (pad * 2) - 190, 46);
-            toggleButton.SetBounds(width - pad - toggleButton.Width, 100, toggleButton.Width, 42);
-            subLine.SetBounds(pad, 150, width - (pad * 2), 18);
+            taskIdField.SetBounds(colX, 14, colWidth, taskIdField.Height);
+            toggleButton.SetBounds(colX, 92, colWidth, 42);
+
+            otCheckbox.SetBounds(pad, 142, width - (pad * 2), 22);
+            otNote.SetBounds(pad + 22, 164, width - (pad * 2) - 22, 18);
+
             progressTrack.SetBounds(pad, ControlCardHeight - 12, width - (pad * 2), 6);
         }
 
@@ -901,7 +1005,7 @@ namespace RPV_Tracker.Pages
             return new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = font,
                 ForeColor = color,
                 Text = text,
@@ -915,9 +1019,9 @@ namespace RPV_Tracker.Pages
             return new Label
             {
                 AutoSize = false,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 Font = RpvTheme.FontH3,
-                ForeColor = RpvTheme.Midnight,
+                ForeColor = RpvTheme.HeadingText,
                 Height = 34,
                 Text = text,
                 UseMnemonic = false,
@@ -944,6 +1048,9 @@ namespace RPV_Tracker.Pages
                 service.Ticked -= service_Ticked;
                 service.IntervalCompleted -= service_IntervalCompleted;
                 service.StateChanged -= service_StateChanged;
+
+                scheduleTimer.Stop();
+                scheduleTimer.Dispose();
 
                 if (previewBox != null && previewBox.Image != null)
                 {

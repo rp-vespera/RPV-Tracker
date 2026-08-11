@@ -49,6 +49,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Branding\RpvTheme.cs" />
+    <Compile Include="Controls\ActivityBarChart.cs">
+      <SubType>Component</SubType>
+    </Compile>
     <Compile Include="Controls\CardPanel.cs">
       <SubType>Component</SubType>
     </Compile>
@@ -64,17 +67,19 @@
     <Compile Include="Controls\RpvLogo.cs">
       <SubType>Component</SubType>
     </Compile>
+    <Compile Include="Controls\ScrollWheelRouter.cs" />
+    <Compile Include="Controls\SegmentedControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
     <Compile Include="Controls\StatCard.cs">
       <SubType>Component</SubType>
     </Compile>
-    <Compile Include="Controls\StatusPill.cs">
+    <Compile Include="Controls\ThemedComboBox.cs">
       <SubType>Component</SubType>
     </Compile>
     <Compile Include="Domains\Auth\Models\AuthModels.cs" />
     <Compile Include="Domains\Auth\Services\AppSession.cs" />
     <Compile Include="Domains\Auth\Services\AuthService.cs" />
-    <Compile Include="Domains\Dashboard\Models\DashboardModels.cs" />
-    <Compile Include="Domains\Dashboard\Services\DashboardService.cs" />
     <Compile Include="Domains\Pulse\Models\PulseModels.cs" />
     <Compile Include="Domains\Pulse\Services\PulseService.cs" />
     <Compile Include="Domains\TimeTracking\Models\TimeTrackingModels.cs" />
@@ -95,13 +100,21 @@
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Infrastructure\ApiClient.cs" />
+    <Compile Include="Infrastructure\AppSettings.cs" />
     <Compile Include="Infrastructure\PulseApiClient.cs" />
+    <Compile Include="Infrastructure\TaskHistoryStore.cs" />
     <Compile Include="Infrastructure\TrackerApiClient.cs" />
     <Compile Include="Infrastructure\RpvConfig.cs" />
     <Compile Include="Pages\DashboardPage.cs">
       <SubType>UserControl</SubType>
     </Compile>
     <Compile Include="Pages\PlaceholderPage.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Pages\SettingsPage.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Pages\TaskHistoryPage.cs">
       <SubType>UserControl</SubType>
     </Compile>
     <Compile Include="Pages\TimeTrackerPage.cs">

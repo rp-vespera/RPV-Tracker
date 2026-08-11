@@ -13,8 +13,8 @@ using RPV_Tracker.Pages;
 namespace RPV_Tracker.Forms
 {
     /// <summary>
-    /// The application shell: Midnight nav bar over a Cream content area. Pages are
-    /// swapped into the content area rather than opened as separate windows.
+    /// The application shell: brand nav bar over a themed content area. Pages are swapped
+    /// into the content area rather than opened as separate windows.
     /// </summary>
     public partial class MainForm : Form
     {
@@ -23,18 +23,22 @@ namespace RPV_Tracker.Forms
         // Section title per nav key. Adding a module means adding a line here and, when
         // it has a real screen, a case in CreatePage.
         private const string TrackerKey = "tracker";
+        private const string HistoryKey = "history";
+        private const string SettingsKey = "settings";
 
         private static readonly KeyValuePair<string, string>[] Sections =
         {
             new KeyValuePair<string, string>(DashboardKey, "Dashboard"),
             new KeyValuePair<string, string>(TrackerKey, "Time tracker"),
-            new KeyValuePair<string, string>("employees", "Employees"),
-            new KeyValuePair<string, string>("requests", "Requests"),
-            new KeyValuePair<string, string>("reports", "Reports")
+            new KeyValuePair<string, string>(HistoryKey, "Task history")
         };
 
         private readonly Dictionary<string, UserControl> pages = new Dictionary<string, UserControl>();
         private readonly List<NavLink> navLinks = new List<NavLink>();
+
+        // Lives in the account cluster rather than the section tabs — it's a personal
+        // preference screen, not a workspace section.
+        private readonly NavLink settingsLink;
 
         // Owned here, not by the tracker page, so tracking keeps running when the user
         // navigates to other sections and the nav bar can show a live recording indicator.
@@ -54,7 +58,16 @@ namespace RPV_Tracker.Forms
             tracking.IntervalCompleted += tracking_IntervalCompleted;
             tracking.SessionEnded += tracking_SessionEnded;
 
+            settingsLink = new NavLink { Text = "Settings", PageKey = SettingsKey };
+            settingsLink.Click += (s, e) => Navigate(SettingsKey);
+            navBar.Controls.Add(settingsLink);
+
+            RpvTheme.ThemeChanged += RpvTheme_ThemeChanged;
+
             BuildNavLinks();
+            LayoutChrome();
+            navBar.Resize += (s, e) => LayoutChrome();
+
             Navigate(DashboardKey);
         }
 
@@ -84,9 +97,12 @@ namespace RPV_Tracker.Forms
             }
         }
 
-        // On session end, post the summary "attachment" to the backend, keyed by task id.
+        // On session end, log it to the local Task history store and post the summary
+        // "attachment" to the backend, keyed by task id.
         private async void tracking_SessionEnded(object sender, TrackingSessionSummary summary)
         {
+            TaskHistoryStore.Append(summary);
+
             if (!RpvConfig.TrackerUploadEnabled || !summary.TaskId.HasValue)
             {
                 return;
@@ -132,6 +148,44 @@ namespace RPV_Tracker.Forms
             Navigate(link.PageKey);
         }
 
+        /// <summary>
+        /// Right-aligns the account cluster (recording indicator, settings, avatar, name,
+        /// sign out) against the nav bar's actual width, then gives the section tabs exactly
+        /// whatever room is left. Computed at runtime — rather than trusting hardcoded
+        /// Designer coordinates — so a resize, a longer name, or a future tab can never
+        /// silently overlap it; the tabs just get however much space remains.
+        /// </summary>
+        private void LayoutChrome()
+        {
+            const int rightMargin = 24;
+            const int gap = 12;
+
+            int x = navBar.ClientSize.Width - rightMargin;
+
+            x -= signOutLink.Width;
+            signOutLink.Left = x;
+
+            x -= 16;
+            x -= userNameLabel.Width;
+            userNameLabel.Left = x;
+
+            x -= 8;
+            x -= userMonogram.Width;
+            userMonogram.Left = x;
+
+            x -= gap;
+            x -= settingsLink.Width;
+            settingsLink.Top = 0;
+            settingsLink.Height = RpvTheme.NavHeight;
+            settingsLink.Left = x;
+
+            x -= gap;
+            x -= trackingIndicator.Width;
+            trackingIndicator.Left = x;
+
+            navLinksHost.Width = Math.Max(0, x - gap - navLinksHost.Left);
+        }
+
         private void Navigate(string key)
         {
             if (key == activeKey)
@@ -158,18 +212,31 @@ namespace RPV_Tracker.Forms
             {
                 link.IsActive = link.PageKey == key;
             }
+            settingsLink.IsActive = key == SettingsKey;
         }
 
         private UserControl CreatePage(string key)
         {
             if (key == DashboardKey)
             {
-                return new DashboardPage();
+                var dashboard = new DashboardPage();
+                dashboard.OpenTrackerRequested += (s, e) => Navigate(TrackerKey);
+                return dashboard;
             }
 
             if (key == TrackerKey)
             {
                 return new TimeTrackerPage(tracking);
+            }
+
+            if (key == HistoryKey)
+            {
+                return new TaskHistoryPage(tracking);
+            }
+
+            if (key == SettingsKey)
+            {
+                return new SettingsPage(tracking);
             }
 
             string title = key;
@@ -185,6 +252,51 @@ namespace RPV_Tracker.Forms
             var placeholder = new PlaceholderPage(title);
             placeholder.BackRequested += (s, e) => Navigate(DashboardKey);
             return placeholder;
+        }
+
+        private void RpvTheme_ThemeChanged(object sender, EventArgs e)
+        {
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            // Defer to the next message-loop tick: this can fire from inside a click handler
+            // on a control that's about to be disposed by the rebuild below (the Settings
+            // page's own theme switch is exactly that), and tearing down a control tree in
+            // the middle of handling its own click is asking for trouble.
+            BeginInvoke((MethodInvoker)(() =>
+            {
+                if (IsDisposed || Disposing)
+                {
+                    return;
+                }
+
+                BackColor = RpvTheme.Cream;
+                contentPanel.BackColor = RpvTheme.Cream;
+                RebuildPages();
+            }));
+        }
+
+        /// <summary>
+        /// Pages bake their colours in at construction time, so a theme switch can't just
+        /// repaint them — every cached page is dropped and the active one rebuilt fresh.
+        /// </summary>
+        private void RebuildPages()
+        {
+            string key = activeKey;
+
+            foreach (UserControl page in pages.Values)
+            {
+                page.Dispose();
+            }
+            pages.Clear();
+
+            activeKey = null;
+            if (key != null)
+            {
+                Navigate(key);
+            }
         }
 
         private async void signOutLink_Click(object sender, EventArgs e)
@@ -208,6 +320,8 @@ namespace RPV_Tracker.Forms
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            RpvTheme.ThemeChanged -= RpvTheme_ThemeChanged;
+
             // Stop tracking and remove the global input hooks before the window goes away.
             // Stop() first so its SessionEnded fires while the upload handler is still attached
             // (fires the final screenshot upload + session post — best-effort on shutdown).

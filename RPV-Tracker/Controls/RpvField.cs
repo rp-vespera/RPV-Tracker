@@ -50,7 +50,7 @@ namespace RPV_Tracker.Controls
                 BorderStyle = BorderStyle.None,
                 Font = RpvTheme.FontBody,
                 ForeColor = RpvTheme.Charcoal,
-                BackColor = RpvTheme.White,
+                BackColor = RpvTheme.CardSurface,
                 TabIndex = 0
             };
 
@@ -225,7 +225,7 @@ namespace RPV_Tracker.Controls
 
             using (var path = RpvTheme.RoundedRect(box, 6))
             {
-                using (var brush = new SolidBrush(RpvTheme.White))
+                using (var brush = new SolidBrush(RpvTheme.CardSurface))
                 {
                     g.FillPath(brush, path);
                 }

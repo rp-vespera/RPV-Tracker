@@ -11,7 +11,7 @@ namespace RPV_Tracker.Controls
     internal class RpvLogo : Control
     {
         private float pointSize = 15f;
-        private Color wordmarkColor = RpvTheme.White;
+        private Color wordmarkColor = RpvTheme.OnAccent;
 
         public RpvLogo()
         {
@@ -96,7 +96,7 @@ namespace RPV_Tracker.Controls
                 g.FillEllipse(brush, circle);
             }
 
-            TextRenderer.DrawText(g, initials, RpvTheme.FontMicro, circle, RpvTheme.White,
+            TextRenderer.DrawText(g, initials, RpvTheme.FontMicro, circle, RpvTheme.OnAccent,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
     }

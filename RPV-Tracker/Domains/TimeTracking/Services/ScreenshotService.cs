@@ -2,11 +2,10 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using System.Windows.Forms;
 
 namespace RPV_Tracker.Domains.TimeTracking.Services
 {
-    /// <summary>Captures the full desktop (all monitors) to a JPEG on disk.</summary>
+    /// <summary>Captures a screen region — the full virtual desktop or a single monitor — to a JPEG on disk.</summary>
     internal static class ScreenshotService
     {
         // JPEG rather than PNG: a full multi-monitor PNG can run to several megabytes, which
@@ -16,14 +15,15 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
         private static readonly ImageCodecInfo JpegEncoder = FindEncoder(ImageFormat.Jpeg);
 
         /// <summary>
-        /// Captures the virtual screen into <paramref name="folder"/> and returns the file path.
-        /// The folder is created if needed. Throws on failure so the caller can record the error.
+        /// Captures <paramref name="bounds"/> (the virtual screen, or a single monitor per
+        /// the user's capture settings) into <paramref name="folder"/> and returns the file
+        /// path. The folder is created if needed. Throws on failure so the caller can record
+        /// the error.
         /// </summary>
-        public static string Capture(string folder)
+        public static string Capture(string folder, Rectangle bounds)
         {
             Directory.CreateDirectory(folder);
 
-            Rectangle bounds = SystemInformation.VirtualScreen;
             // Milliseconds in the name so a capture on manual stop can't collide with the
             // interval capture that may land in the same second.
             string path = Path.Combine(folder, "shot-" + DateTime.Now.ToString("HHmmss-fff") + ".jpg");
