@@ -94,32 +94,10 @@ namespace RPV_Tracker.Infrastructure
         }
 
         /// <summary>
-        /// Base URL of the RPV backend that receives tracker screenshot uploads and the
-        /// end-of-session record (POST tracker/screenshot, POST tracker/session). This is the
-        /// procurement/interment monolith, not the Pulse tasks service — point it at wherever
-        /// that backend is served.
-        /// </summary>
-        public static string TrackerApiBaseUrl
-        {
-            get
-            {
-                string value = ConfigurationManager.AppSettings["Rpv.Tracker.ApiBaseUrl"];
-                return string.IsNullOrWhiteSpace(value)
-                    ? "http://127.0.0.1:8000/api"
-                    : value.TrimEnd('/');
-            }
-        }
-
-        /// <summary>Shared secret sent as X-Tracker-Token. Must match the backend's TRACKER_TOKEN.</summary>
-        public static string TrackerToken
-        {
-            get { return ConfigurationManager.AppSettings["Rpv.Tracker.Token"] ?? string.Empty; }
-        }
-
-        /// <summary>
-        /// When true, each interval screenshot is uploaded to the backend (Cloudflare) and a
-        /// session record is posted on stop. Uploads are best-effort — failures never interrupt
-        /// tracking. Turn off to keep screenshots purely local.
+        /// When true, each interval screenshot + activity metrics is uploaded to
+        /// POST /v1/tracker-sessions (Sanctum-authenticated, same host as <see cref="ApiBaseUrl"/>).
+        /// Uploads are best-effort — failures never interrupt tracking. Turn off to keep
+        /// screenshots purely local.
         /// </summary>
         public static bool TrackerUploadEnabled
         {

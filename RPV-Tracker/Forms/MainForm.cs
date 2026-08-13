@@ -76,8 +76,9 @@ namespace RPV_Tracker.Forms
             trackingIndicator.Visible = tracking.IsTracking;
         }
 
-        // Upload each interval's screenshot to the backend (Cloudflare) as it completes.
-        // Best-effort: a failed upload is logged but never interrupts tracking.
+        // Upload each interval's screenshot + activity metrics to the employee-scoped
+        // /v1/tracker-sessions API (Sanctum-authenticated). Best-effort: a failed upload
+        // is logged but never interrupts tracking.
         private async void tracking_IntervalCompleted(object sender, ActivityInterval interval)
         {
             if (!RpvConfig.TrackerUploadEnabled || !tracking.ActiveTaskId.HasValue
@@ -88,34 +89,21 @@ namespace RPV_Tracker.Forms
 
             try
             {
-                await TrackerUploadService.UploadScreenshotAsync(
-                    tracking.ActiveTaskId.Value, tracking.SessionId, interval.ScreenshotPath, interval.EndedAt);
+                await TrackerSessionsService.UploadAsync(
+                    interval.ScreenshotPath, interval.EndedAt, interval.KeyCount, interval.ClickCount, interval.ActivityPercent);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("Tracker screenshot upload failed: " + ex.Message);
+                System.Diagnostics.Debug.WriteLine("Tracker session upload failed: " + ex.Message);
             }
         }
 
-        // On session end, log it to the local Task history store and post the summary
-        // "attachment" to the backend, keyed by task id.
-        private async void tracking_SessionEnded(object sender, TrackingSessionSummary summary)
+        // On session end, log it to the local Task history store. There is no server-side
+        // end-of-session summary endpoint (the backend's tracker-sessions table is one row
+        // per screenshot, not a session aggregate), so this stays local-only.
+        private void tracking_SessionEnded(object sender, TrackingSessionSummary summary)
         {
             TaskHistoryStore.Append(summary);
-
-            if (!RpvConfig.TrackerUploadEnabled || !summary.TaskId.HasValue)
-            {
-                return;
-            }
-
-            try
-            {
-                await TrackerUploadService.EndSessionAsync(summary);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("Tracker session post failed: " + ex.Message);
-            }
         }
 
         /// <summary>

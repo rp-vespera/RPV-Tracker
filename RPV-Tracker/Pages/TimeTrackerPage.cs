@@ -92,6 +92,11 @@ namespace RPV_Tracker.Pages
         private bool loading;
         private string dataError;
 
+        // Cached result of today's server-side attendance check — refreshed on load/Refresh,
+        // not on the 30s schedule timer. Null (never fetched, or the fetch failed) fails safe:
+        // no cached confirmation of attendance means the OT checkbox stays hidden.
+        private AttendanceCheckResult attendanceCheck;
+
         public TimeTrackerPage(TimeTrackingService trackingService)
         {
             service = trackingService;
@@ -326,6 +331,18 @@ namespace RPV_Tracker.Pages
                 perf = null;
             }
 
+            AttendanceCheckResult attendance;
+            try
+            {
+                attendance = await AttendanceService.CheckAsync(DateTime.Today);
+            }
+            catch (Exception)
+            {
+                // Fails safe — no confirmed attendance means the OT checkbox stays hidden
+                // rather than trusting the local schedule setting alone.
+                attendance = null;
+            }
+
             if (IsDisposed)
             {
                 return;
@@ -333,6 +350,7 @@ namespace RPV_Tracker.Pages
 
             loading = false;
             dataError = error;
+            attendanceCheck = attendance;
             tasks = (loadedTasks ?? new List<PulseTask>())
                 .OrderByDescending(t => t.CanTrack)
                 .ThenByDescending(t => t.DaysLate)
@@ -510,12 +528,17 @@ namespace RPV_Tracker.Pages
             // Red field border only once something invalid has actually been entered.
             taskIdField.HasError = !canStart && EnteredTaskId().HasValue && dataError == null;
 
-            // Starting outside the configured work schedule offers an OT request — checked
-            // by default the moment it appears, but the operator can uncheck it before starting.
-            bool offerOt = AppSettings.IsOutsideSchedule(DateTime.Now);
-            otCheckbox.Visible = offerOt;
-            otNote.Visible = offerOt;
-            if (offerOt)
+            // Starting outside the configured work schedule offers an OT request — but only
+            // when today's server-side attendance check confirms the employee actually worked
+            // the morning or afternoon half of the day (see AttendanceService/HrTapsController
+            // ::attendanceCheck). Checked by default the moment it appears, but the operator
+            // can uncheck it before starting.
+            bool outsideSchedule = AppSettings.IsOutsideSchedule(DateTime.Now);
+            bool canRequestOt = outsideSchedule && attendanceCheck != null && attendanceCheck.CanRequestOvertime;
+
+            otCheckbox.Visible = canRequestOt;
+            otNote.Visible = outsideSchedule;
+            if (canRequestOt)
             {
                 if (!otPreviouslyOffered)
                 {
@@ -524,7 +547,13 @@ namespace RPV_Tracker.Pages
                 otNote.Text = "Outside your scheduled hours (" + FormatTimeOfDay(AppSettings.WorkScheduleStart)
                     + " – " + FormatTimeOfDay(AppSettings.WorkScheduleEnd) + ") — check to request overtime.";
             }
-            otPreviouslyOffered = offerOt;
+            else if (outsideSchedule)
+            {
+                otNote.Text = attendanceCheck == null
+                    ? "Outside your scheduled hours, but today's attendance couldn't be verified — overtime can't be requested right now."
+                    : "Outside your scheduled hours, but no attendance is on file for today — overtime can't be requested.";
+            }
+            otPreviouslyOffered = canRequestOt;
         }
 
         private static string FormatTimeOfDay(TimeSpan time)

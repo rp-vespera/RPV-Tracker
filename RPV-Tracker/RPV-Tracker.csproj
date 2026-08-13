@@ -83,10 +83,12 @@
     <Compile Include="Domains\Pulse\Models\PulseModels.cs" />
     <Compile Include="Domains\Pulse\Services\PulseService.cs" />
     <Compile Include="Domains\TimeTracking\Models\TimeTrackingModels.cs" />
+    <Compile Include="Domains\TimeTracking\Services\AttendanceService.cs" />
     <Compile Include="Domains\TimeTracking\Services\InputMonitor.cs" />
     <Compile Include="Domains\TimeTracking\Services\ScreenshotService.cs" />
     <Compile Include="Domains\TimeTracking\Services\TimeTrackingService.cs" />
-    <Compile Include="Domains\TimeTracking\Services\TrackerUploadService.cs" />
+    <Compile Include="Domains\TimeTracking\Services\TrackerSessionsService.cs" />
+    <Compile Include="Domains\TimeTracking\Services\TrackerSettingsService.cs" />
     <Compile Include="Forms\LoginForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -103,7 +105,6 @@
     <Compile Include="Infrastructure\AppSettings.cs" />
     <Compile Include="Infrastructure\PulseApiClient.cs" />
     <Compile Include="Infrastructure\TaskHistoryStore.cs" />
-    <Compile Include="Infrastructure\TrackerApiClient.cs" />
     <Compile Include="Infrastructure\RpvConfig.cs" />
     <Compile Include="Pages\DashboardPage.cs">
       <SubType>UserControl</SubType>

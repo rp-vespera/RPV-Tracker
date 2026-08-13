@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -50,6 +51,53 @@ namespace RPV_Tracker.Infrastructure
         {
             var request = new HttpRequestMessage(HttpMethod.Get, path.TrimStart('/'));
             return await SendAsync(request, bearerToken).ConfigureAwait(false);
+        }
+
+        public static async Task<Dictionary<string, object>> PutAsync(string path, object payload, string bearerToken = null)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Put, path.TrimStart('/'))
+            {
+                Content = new StringContent(Json.Serialize(payload), Encoding.UTF8, "application/json")
+            };
+            return await SendAsync(request, bearerToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// POST a file (multipart/form-data) plus string fields, authenticated with a bearer
+        /// token — used by the tracker-sessions upload, which identifies the signed-in employee
+        /// via their Sanctum token.
+        /// </summary>
+        public static async Task<Dictionary<string, object>> PostFileAsync(
+            string path,
+            string fileFieldName,
+            string filePath,
+            string contentType,
+            IDictionary<string, string> fields,
+            string bearerToken = null)
+        {
+            if (!File.Exists(filePath))
+            {
+                throw new ApiException("File to upload was not found: " + filePath);
+            }
+
+            using (var form = new MultipartFormDataContent())
+            using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                if (fields != null)
+                {
+                    foreach (KeyValuePair<string, string> field in fields)
+                    {
+                        form.Add(new StringContent(field.Value ?? string.Empty), field.Key);
+                    }
+                }
+
+                var fileContent = new StreamContent(fileStream);
+                fileContent.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+                form.Add(fileContent, fileFieldName, Path.GetFileName(filePath));
+
+                var request = new HttpRequestMessage(HttpMethod.Post, path.TrimStart('/')) { Content = form };
+                return await SendAsync(request, bearerToken).ConfigureAwait(false);
+            }
         }
 
         private static async Task<Dictionary<string, object>> SendAsync(HttpRequestMessage request, string bearerToken)
@@ -161,6 +209,24 @@ namespace RPV_Tracker.Infrastructure
                 return value as Dictionary<string, object>;
             }
             return null;
+        }
+
+        public static bool ReadBool(Dictionary<string, object> map, string key, bool fallback = false)
+        {
+            object value;
+            if (map != null && map.TryGetValue(key, out value) && value != null)
+            {
+                if (value is bool)
+                {
+                    return (bool)value;
+                }
+                bool parsed;
+                if (bool.TryParse(value.ToString(), out parsed))
+                {
+                    return parsed;
+                }
+            }
+            return fallback;
         }
     }
 }
