@@ -40,9 +40,12 @@ namespace RPV_Tracker.Infrastructure
 
         public static async Task<Dictionary<string, object>> PostAsync(string path, object payload, string bearerToken = null)
         {
+            string body = Json.Serialize(payload);
+            DebugLog.Write("api", "POST " + path + " body " + DebugLog.Body(body));
+
             var request = new HttpRequestMessage(HttpMethod.Post, path.TrimStart('/'))
             {
-                Content = new StringContent(Json.Serialize(payload), Encoding.UTF8, "application/json")
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
             };
             return await SendAsync(request, bearerToken).ConfigureAwait(false);
         }
@@ -55,9 +58,12 @@ namespace RPV_Tracker.Infrastructure
 
         public static async Task<Dictionary<string, object>> PutAsync(string path, object payload, string bearerToken = null)
         {
+            string body = Json.Serialize(payload);
+            DebugLog.Write("api", "PUT " + path + " body " + DebugLog.Body(body));
+
             var request = new HttpRequestMessage(HttpMethod.Put, path.TrimStart('/'))
             {
-                Content = new StringContent(Json.Serialize(payload), Encoding.UTF8, "application/json")
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
             };
             return await SendAsync(request, bearerToken).ConfigureAwait(false);
         }
@@ -95,6 +101,10 @@ namespace RPV_Tracker.Infrastructure
                 fileContent.Headers.ContentType = new MediaTypeHeaderValue(contentType);
                 form.Add(fileContent, fileFieldName, Path.GetFileName(filePath));
 
+                DebugLog.Write("api", "POST " + path + " multipart " + fileFieldName + "="
+                    + Path.GetFileName(filePath) + " (" + fileStream.Length + " bytes)"
+                    + (fields != null ? " fields " + string.Join(", ", DescribeFields(fields)) : string.Empty));
+
                 var request = new HttpRequestMessage(HttpMethod.Post, path.TrimStart('/')) { Content = form };
                 return await SendAsync(request, bearerToken).ConfigureAwait(false);
             }
@@ -107,6 +117,15 @@ namespace RPV_Tracker.Infrastructure
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
             }
 
+            Uri absolute = request.RequestUri.IsAbsoluteUri
+                ? request.RequestUri
+                : new Uri(Http.BaseAddress, request.RequestUri);
+            string label = request.Method + " " + absolute;
+
+            DebugLog.Write("api", "→ " + label + "  auth=" + DebugLog.Fingerprint(bearerToken));
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
             HttpResponseMessage response;
             try
             {
@@ -114,10 +133,13 @@ namespace RPV_Tracker.Infrastructure
             }
             catch (TaskCanceledException ex)
             {
+                DebugLog.Write("api", "✗ " + label + " timed out after " + stopwatch.ElapsedMilliseconds + " ms");
                 throw new ApiException("The server took too long to respond. Check your connection and try again.", ex);
             }
             catch (HttpRequestException ex)
             {
+                DebugLog.Write("api", "✗ " + label + " could not be reached after " + stopwatch.ElapsedMilliseconds + " ms");
+                DebugLog.Exception("api", ex);
                 throw new ApiException("We can't reach the RPV server right now. Check your connection and try again.", ex);
             }
 
@@ -126,6 +148,10 @@ namespace RPV_Tracker.Infrastructure
             {
                 body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
+                DebugLog.Write("api", "← " + (int)response.StatusCode + " " + response.StatusCode
+                    + " in " + stopwatch.ElapsedMilliseconds + " ms  " + label);
+                DebugLog.Write("api", "   body " + DebugLog.Body(body));
+
                 if (!response.IsSuccessStatusCode)
                 {
                     throw new ApiException(DescribeFailure((int)response.StatusCode, body));
@@ -133,6 +159,16 @@ namespace RPV_Tracker.Infrastructure
             }
 
             return Parse(body);
+        }
+
+        private static string[] DescribeFields(IDictionary<string, string> fields)
+        {
+            var parts = new List<string>();
+            foreach (KeyValuePair<string, string> field in fields)
+            {
+                parts.Add(field.Key + "=" + field.Value);
+            }
+            return parts.ToArray();
         }
 
         private static string DescribeFailure(int statusCode, string body)
@@ -220,10 +256,21 @@ namespace RPV_Tracker.Infrastructure
                 {
                     return (bool)value;
                 }
+
+                string text = value.ToString();
                 bool parsed;
-                if (bool.TryParse(value.ToString(), out parsed))
+                if (bool.TryParse(text, out parsed))
                 {
                     return parsed;
+                }
+
+                // A tinyint column that isn't cast to bool on the server arrives as 1/0 (or
+                // "1"/"0"), which bool.TryParse rejects outright — treating that as false is
+                // how an eligible employee silently loses a flag like can_request_ot.
+                int number;
+                if (int.TryParse(text, out number))
+                {
+                    return number != 0;
                 }
             }
             return fallback;

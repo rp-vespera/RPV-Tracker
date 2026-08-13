@@ -24,13 +24,15 @@ namespace RPV_Tracker.Forms
         // it has a real screen, a case in CreatePage.
         private const string TrackerKey = "tracker";
         private const string HistoryKey = "history";
+        private const string ReportKey = "report";
         private const string SettingsKey = "settings";
 
         private static readonly KeyValuePair<string, string>[] Sections =
         {
             new KeyValuePair<string, string>(DashboardKey, "Dashboard"),
             new KeyValuePair<string, string>(TrackerKey, "Time tracker"),
-            new KeyValuePair<string, string>(HistoryKey, "Task history")
+            new KeyValuePair<string, string>(HistoryKey, "Task history"),
+            new KeyValuePair<string, string>(ReportKey, "Report")
         };
 
         private readonly Dictionary<string, UserControl> pages = new Dictionary<string, UserControl>();
@@ -46,6 +48,9 @@ namespace RPV_Tracker.Forms
 
         private string activeKey;
 
+        /// <summary>When the profile card last closed, so a click that dismissed it can't reopen it.</summary>
+        private DateTime profileClosedAt = DateTime.MinValue;
+
         public MainForm()
         {
             InitializeComponent();
@@ -53,6 +58,11 @@ namespace RPV_Tracker.Forms
             AuthenticatedUser user = AppSession.User;
             userNameLabel.Text = user != null ? user.FullName : string.Empty;
             userMonogram.Initials = user != null ? user.Initials : "RPV";
+
+            userNameLabel.Cursor = Cursors.Hand;
+            userMonogram.Cursor = Cursors.Hand;
+            userNameLabel.Click += profile_Click;
+            userMonogram.Click += profile_Click;
 
             tracking.StateChanged += tracking_StateChanged;
             tracking.IntervalCompleted += tracking_IntervalCompleted;
@@ -81,6 +91,12 @@ namespace RPV_Tracker.Forms
         // is logged but never interrupts tracking.
         private async void tracking_IntervalCompleted(object sender, ActivityInterval interval)
         {
+            // Recorded before the upload gate below, and regardless of it: the Report page
+            // reads this log, and a day's shape shouldn't disappear because uploads are off
+            // or a capture failed.
+            IntervalHistoryStore.Append(interval, tracking.SessionId, tracking.ActiveTaskId,
+                tracking.ActiveTaskTitle, tracking.IsOvertimeSession);
+
             if (!RpvConfig.TrackerUploadEnabled || !tracking.ActiveTaskId.HasValue
                 || string.IsNullOrEmpty(interval.ScreenshotPath))
             {
@@ -128,6 +144,27 @@ namespace RPV_Tracker.Forms
                 navLinks.Add(link);
                 navLinksHost.Controls.Add(link);
             }
+        }
+
+        private void profile_Click(object sender, EventArgs e)
+        {
+            AuthenticatedUser user = AppSession.User;
+            if (user == null)
+            {
+                return;
+            }
+
+            // Clicking the name while the card is already open deactivates it — which closes
+            // it — and only then delivers this click. Without the guard the card would blink
+            // shut and immediately reopen, so a second click could never dismiss it.
+            if ((DateTime.Now - profileClosedAt).TotalMilliseconds < 250)
+            {
+                return;
+            }
+
+            var popup = new ProfilePopup(user);
+            popup.FormClosed += (s, args) => profileClosedAt = DateTime.Now;
+            popup.ShowBelow(this, userMonogram);
         }
 
         private void navLink_Click(object sender, EventArgs e)
@@ -220,6 +257,11 @@ namespace RPV_Tracker.Forms
             if (key == HistoryKey)
             {
                 return new TaskHistoryPage(tracking);
+            }
+
+            if (key == ReportKey)
+            {
+                return new ReportPage(tracking);
             }
 
             if (key == SettingsKey)

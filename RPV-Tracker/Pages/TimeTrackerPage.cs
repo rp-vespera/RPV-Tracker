@@ -97,6 +97,13 @@ namespace RPV_Tracker.Pages
         // no cached confirmation of attendance means the OT checkbox stays hidden.
         private AttendanceCheckResult attendanceCheck;
 
+        /// <summary>Why the last attendance check failed, so the OT note can say so instead of
+        /// leaving the operator guessing at a generic "couldn't be verified".</summary>
+        private string attendanceError;
+
+        /// <summary>Last OT-gate state written to the log, so repeats aren't logged again.</summary>
+        private string lastOtGateLog;
+
         public TimeTrackerPage(TimeTrackingService trackingService)
         {
             service = trackingService;
@@ -332,15 +339,19 @@ namespace RPV_Tracker.Pages
             }
 
             AttendanceCheckResult attendance;
+            string attendanceFailure = null;
             try
             {
                 attendance = await AttendanceService.CheckAsync(DateTime.Today);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // Fails safe — no confirmed attendance means the OT checkbox stays hidden
-                // rather than trusting the local schedule setting alone.
+                // rather than trusting the local schedule setting alone. The reason is kept
+                // (and logged) so it can be shown rather than swallowed.
                 attendance = null;
+                attendanceFailure = ex.Message;
+                DebugLog.Exception("attendance", ex);
             }
 
             if (IsDisposed)
@@ -351,6 +362,7 @@ namespace RPV_Tracker.Pages
             loading = false;
             dataError = error;
             attendanceCheck = attendance;
+            attendanceError = attendanceFailure;
             tasks = (loadedTasks ?? new List<PulseTask>())
                 .OrderByDescending(t => t.CanTrack)
                 .ThenByDescending(t => t.DaysLate)
@@ -536,6 +548,8 @@ namespace RPV_Tracker.Pages
             bool outsideSchedule = AppSettings.IsOutsideSchedule(DateTime.Now);
             bool canRequestOt = outsideSchedule && attendanceCheck != null && attendanceCheck.CanRequestOvertime;
 
+            LogOtGate(outsideSchedule, canRequestOt);
+
             otCheckbox.Visible = canRequestOt;
             otNote.Visible = outsideSchedule;
             if (canRequestOt)
@@ -549,9 +563,22 @@ namespace RPV_Tracker.Pages
             }
             else if (outsideSchedule)
             {
-                otNote.Text = attendanceCheck == null
-                    ? "Outside your scheduled hours, but today's attendance couldn't be verified — overtime can't be requested right now."
-                    : "Outside your scheduled hours, but no attendance is on file for today — overtime can't be requested.";
+                if (attendanceCheck == null)
+                {
+                    // Naming the failure turns "it just doesn't work" into something the
+                    // operator (or their admin) can act on — an expired session, an
+                    // unreachable server, or a missing endpoint each need a different fix.
+                    otNote.Text = "Outside your scheduled hours, but today's attendance couldn't be verified"
+                        + (string.IsNullOrWhiteSpace(attendanceError) ? "." : ": " + attendanceError)
+                        + " Overtime can't be requested right now.";
+                }
+                else
+                {
+                    otNote.Text = "Outside your scheduled hours, but no attendance is on file for today"
+                        + " (morning: " + (attendanceCheck.WorkedMorning ? "yes" : "no")
+                        + ", afternoon: " + (attendanceCheck.WorkedAfternoon ? "yes" : "no")
+                        + ") — overtime can't be requested.";
+                }
             }
             otPreviouslyOffered = canRequestOt;
         }
@@ -559,6 +586,34 @@ namespace RPV_Tracker.Pages
         private static string FormatTimeOfDay(TimeSpan time)
         {
             return DateTime.Today.Add(time).ToString("h:mm tt");
+        }
+
+        /// <summary>
+        /// Records every input to the OT decision, but only when the outcome actually changes —
+        /// <see cref="UpdateForState"/> runs on a 30-second timer and on every keystroke in the
+        /// task field, which would otherwise bury the log.
+        /// </summary>
+        private void LogOtGate(bool outsideSchedule, bool canRequestOt)
+        {
+            string state = "outsideSchedule=" + outsideSchedule
+                + ", schedule=" + FormatTimeOfDay(AppSettings.WorkScheduleStart)
+                + "–" + FormatTimeOfDay(AppSettings.WorkScheduleEnd)
+                + ", day=" + DateTime.Now.DayOfWeek
+                + ", attendanceCheck=" + (attendanceCheck == null
+                    ? "null (" + (attendanceError ?? "not fetched") + ")"
+                    : "has=" + attendanceCheck.HasAttendance
+                        + "/am=" + attendanceCheck.WorkedMorning
+                        + "/pm=" + attendanceCheck.WorkedAfternoon
+                        + "/canOt=" + attendanceCheck.CanRequestOvertime)
+                + " ⇒ OT offered=" + canRequestOt;
+
+            if (state == lastOtGateLog)
+            {
+                return;
+            }
+
+            lastOtGateLog = state;
+            DebugLog.Write("ot", state);
         }
 
         private void RenderPerformance(Performance perf)

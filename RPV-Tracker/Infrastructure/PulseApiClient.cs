@@ -48,6 +48,9 @@ namespace RPV_Tracker.Infrastructure
             var request = new HttpRequestMessage(HttpMethod.Get, path.TrimStart('/'));
             request.Headers.TryAddWithoutValidation("X-Habit-Token", token);
 
+            string label = "GET " + new Uri(Http.BaseAddress, path.TrimStart('/'));
+            DebugLog.Write("pulse", "→ " + label + "  X-Habit-Token=" + DebugLog.Fingerprint(token));
+
             HttpResponseMessage response;
             try
             {
@@ -55,10 +58,13 @@ namespace RPV_Tracker.Infrastructure
             }
             catch (TaskCanceledException ex)
             {
+                DebugLog.Write("pulse", "✗ " + label + " timed out");
                 throw new ApiException("The tasks service took too long to respond.", ex);
             }
             catch (HttpRequestException ex)
             {
+                DebugLog.Write("pulse", "✗ " + label + " could not be reached");
+                DebugLog.Exception("pulse", ex);
                 throw new ApiException("Can't reach the tasks service right now. Check your connection.", ex);
             }
 
@@ -67,8 +73,11 @@ namespace RPV_Tracker.Infrastructure
             {
                 body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
+                DebugLog.Write("pulse", "← " + (int)response.StatusCode + " " + response.StatusCode + "  " + label);
+
                 if (!response.IsSuccessStatusCode)
                 {
+                    DebugLog.Write("pulse", "   body " + DebugLog.Body(body));
                     throw new ApiException(DescribeFailure((int)response.StatusCode));
                 }
             }

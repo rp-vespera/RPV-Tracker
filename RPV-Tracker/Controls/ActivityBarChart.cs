@@ -81,8 +81,21 @@ namespace RPV_Tracker.Controls
             }
 
             int count = buckets.Count;
-            const int gap = 10;
-            double barWidth = Math.Max(6, (plotWidth - (gap * (count + 1))) / (double)count);
+
+            // A day of 5-minute intervals is ~100 bars where an hourly chart has 8. The gap
+            // closes up as bars multiply, otherwise the gaps eat the plot and every bar
+            // collapses to the 6px floor.
+            int gap = count > 48 ? 2 : count > 24 ? 4 : count > 12 ? 6 : 10;
+            double barWidth = Math.Max(2, (plotWidth - (gap * (count + 1))) / (double)count);
+
+            // Labels are drawn on a stride so they thin out instead of overprinting each
+            // other — every bar still draws, only its label is periodic.
+            int labelStride = 1;
+            int labelRoom = Math.Max(1, plotWidth / 48);
+            if (count > labelRoom)
+            {
+                labelStride = (int)Math.Ceiling(count / (double)labelRoom);
+            }
 
             for (int i = 0; i < count; i++)
             {
@@ -106,9 +119,15 @@ namespace RPV_Tracker.Controls
                     }
                 }
 
-                TextRenderer.DrawText(g, bucket.Label, RpvTheme.FontMicro,
-                    new Rectangle(x - (gap / 2), plotBottom + 4, width + gap, BottomAxis - 4),
-                    RpvTheme.Stone, TextFormatFlags.HorizontalCenter);
+                if (i % labelStride == 0)
+                {
+                    // Labels are centred on their bar but allowed to overhang it, so a wide
+                    // "10:45 AM" still reads when the bar under it is only a few pixels.
+                    const int labelWidth = 64;
+                    TextRenderer.DrawText(g, bucket.Label, RpvTheme.FontMicro,
+                        new Rectangle(x + (width / 2) - (labelWidth / 2), plotBottom + 4, labelWidth, BottomAxis - 4),
+                        RpvTheme.Stone, TextFormatFlags.HorizontalCenter);
+                }
             }
         }
     }
