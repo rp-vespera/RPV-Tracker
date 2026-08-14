@@ -247,6 +247,35 @@ namespace RPV_Tracker.Infrastructure
             return null;
         }
 
+        /// <summary>Reads a JSON array of objects — JavaScriptSerializer hands these back as
+        /// object[], each element already a Dictionary&lt;string, object&gt;.</summary>
+        public static List<Dictionary<string, object>> ReadList(Dictionary<string, object> map, string key)
+        {
+            var result = new List<Dictionary<string, object>>();
+
+            object value;
+            if (map == null || !map.TryGetValue(key, out value))
+            {
+                return result;
+            }
+
+            var items = value as System.Collections.IEnumerable;
+            if (items == null || value is string)
+            {
+                return result;
+            }
+
+            foreach (object item in items)
+            {
+                var itemMap = item as Dictionary<string, object>;
+                if (itemMap != null)
+                {
+                    result.Add(itemMap);
+                }
+            }
+            return result;
+        }
+
         public static bool ReadBool(Dictionary<string, object> map, string key, bool fallback = false)
         {
             object value;

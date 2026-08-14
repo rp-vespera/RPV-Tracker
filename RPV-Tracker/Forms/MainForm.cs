@@ -24,6 +24,7 @@ namespace RPV_Tracker.Forms
         // it has a real screen, a case in CreatePage.
         private const string TrackerKey = "tracker";
         private const string HistoryKey = "history";
+        private const string AttendanceKey = "attendance";
         private const string ReportKey = "report";
         private const string SettingsKey = "settings";
 
@@ -32,6 +33,7 @@ namespace RPV_Tracker.Forms
             new KeyValuePair<string, string>(DashboardKey, "Dashboard"),
             new KeyValuePair<string, string>(TrackerKey, "Time tracker"),
             new KeyValuePair<string, string>(HistoryKey, "Task history"),
+            new KeyValuePair<string, string>(AttendanceKey, "Attendance"),
             new KeyValuePair<string, string>(ReportKey, "Report")
         };
 
@@ -257,6 +259,11 @@ namespace RPV_Tracker.Forms
             if (key == HistoryKey)
             {
                 return new TaskHistoryPage(tracking);
+            }
+
+            if (key == AttendanceKey)
+            {
+                return new AttendancePage();
             }
 
             if (key == ReportKey)

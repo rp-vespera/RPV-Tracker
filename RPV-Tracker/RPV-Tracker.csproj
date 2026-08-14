@@ -111,6 +111,9 @@
     <Compile Include="Infrastructure\TaskHistoryStore.cs" />
     <Compile Include="Infrastructure\IntervalHistoryStore.cs" />
     <Compile Include="Infrastructure\RpvConfig.cs" />
+    <Compile Include="Pages\AttendancePage.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
     <Compile Include="Pages\DashboardPage.cs">
       <SubType>UserControl</SubType>
     </Compile>
