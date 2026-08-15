@@ -20,8 +20,22 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
     /// </remarks>
     internal sealed class TimeTrackingService : IDisposable
     {
+        // Global input hooks keep counting keys/clicks regardless of window focus, minimize,
+        // or hide state — so idle time is measured off real input, never off window visibility.
+        // That's what lets minimizing or hiding the window leave tracking untouched: only a
+        // genuine stretch of no keyboard/mouse input stops the session.
+        private const int IdleThresholdSeconds = 5 * 60;
+
         private readonly InputMonitor monitor = new InputMonitor();
         private readonly Timer heartbeat = new Timer();
+
+        // After an idle auto-stop, watches for the operator's very next key/click so a resume
+        // offer can appear the moment they're back — rather than leaving them to notice the
+        // tray balloon and restart by hand. Polls at a coarser interval than the heartbeat
+        // since it only needs to notice that *any* input occurred, not measure it per-second.
+        private readonly Timer resumeWatch = new Timer { Interval = 500 };
+        private TrackingSessionSummary lastSummary;
+
         private readonly List<ActivityInterval> intervals = new List<ActivityInterval>();
         private int intervalLength;
 
@@ -29,6 +43,8 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
         private string sessionFolder;
         private DateTime sessionStart;
         private int sessionSeconds;
+        private int idleSeconds;
+        private bool autoStoppedIdle;
         private int? activeTaskId;
         private string activeTaskTitle;
         private bool overtime;
@@ -45,6 +61,7 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
             intervalLength = RpvConfig.TrackingIntervalSecondsOverride ?? (AppSettings.ScreenshotIntervalMinutes * 60);
             heartbeat.Interval = 1000;
             heartbeat.Tick += OnHeartbeat;
+            resumeWatch.Tick += OnResumeWatchTick;
         }
 
         /// <summary>
@@ -69,8 +86,22 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
         /// <summary>Fired when tracking starts or stops.</summary>
         public event EventHandler StateChanged;
 
+        /// <summary>
+        /// Fired once a session starts, carrying a summary with zeroed totals — lets the
+        /// shell push a "session in progress" record to the backend immediately, rather than
+        /// the audit trail only learning about a session once it has already ended.
+        /// </summary>
+        public event EventHandler<TrackingSessionSummary> SessionStarted;
+
         /// <summary>Fired once when a session stops, carrying its summary (for backend sync).</summary>
         public event EventHandler<TrackingSessionSummary> SessionEnded;
+
+        /// <summary>
+        /// Fired once, the moment the operator produces the first key/click after an idle
+        /// auto-stop — a chance for the shell to ask whether to resume the same task rather
+        /// than silently leaving the stopped session unnoticed.
+        /// </summary>
+        public event EventHandler<TrackingSessionSummary> IdleResumeSuggested;
 
         public bool IsTracking { get { return tracking; } }
 
@@ -109,6 +140,10 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
                 return;
             }
 
+            // A fresh, explicit start supersedes any pending idle-resume offer — whether this
+            // is the operator accepting it or starting something else entirely.
+            EndResumeWatch();
+
             activeTaskId = taskId;
             activeTaskTitle = taskTitle;
             overtime = isOvertime;
@@ -119,6 +154,8 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
             string leaf = taskId.HasValue ? stamp + "-task-" + taskId.Value : stamp;
             sessionFolder = Path.Combine(RpvConfig.ScreenshotRoot, leaf);
             sessionSeconds = 0;
+            idleSeconds = 0;
+            autoStoppedIdle = false;
             intervals.Clear();
 
             monitor.ResetCounts();
@@ -132,6 +169,20 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
 
             RaiseState();
             RaiseTick();
+
+            EventHandler<TrackingSessionSummary> started = SessionStarted;
+            if (started != null)
+            {
+                started(this, new TrackingSessionSummary
+                {
+                    TaskId = activeTaskId,
+                    TaskTitle = activeTaskTitle,
+                    SessionId = SessionId,
+                    StartedAt = sessionStart,
+                    EndedAt = sessionStart,
+                    IsOvertime = overtime
+                });
+            }
         }
 
         public void Stop()
@@ -151,9 +202,13 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
             }
 
             TrackingSessionSummary summary = BuildSummary();
+            summary.StoppedByIdle = autoStoppedIdle;
+            lastSummary = summary;
 
             monitor.Stop();
             tracking = false;
+            idleSeconds = 0;
+            autoStoppedIdle = false;
 
             RaiseState();
             RaiseTick();
@@ -163,6 +218,50 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
             {
                 ended(this, summary);
             }
+        }
+
+        /// <summary>
+        /// Stops the session after <see cref="IdleThresholdSeconds"/> of no keyboard/mouse
+        /// input, flagging the summary so the shell can tell the operator why it stopped
+        /// rather than leaving it looking like a manual stop.
+        /// </summary>
+        private void StopForIdle()
+        {
+            autoStoppedIdle = true;
+            Stop();
+            BeginResumeWatch();
+        }
+
+        /// <summary>Reinstalls the input hooks (without resuming the heartbeat) purely to
+        /// detect the operator's next key/click.</summary>
+        private void BeginResumeWatch()
+        {
+            monitor.ResetCounts();
+            monitor.Start();
+            resumeWatch.Start();
+        }
+
+        private void OnResumeWatchTick(object sender, EventArgs e)
+        {
+            if (monitor.KeyCount + monitor.ClickCount == 0)
+            {
+                return;
+            }
+
+            TrackingSessionSummary summary = lastSummary;
+            EndResumeWatch();
+
+            EventHandler<TrackingSessionSummary> handler = IdleResumeSuggested;
+            if (handler != null)
+            {
+                handler(this, summary);
+            }
+        }
+
+        private void EndResumeWatch()
+        {
+            resumeWatch.Stop();
+            monitor.Stop();
         }
 
         private TrackingSessionSummary BuildSummary()
@@ -210,6 +309,8 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
             bool activeThisSecond = total > previousTotal;
             previousTotal = total;
 
+            idleSeconds = activeThisSecond ? 0 : idleSeconds + 1;
+
             sessionSeconds++;
             intervalSeconds++;
             if (activeThisSecond)
@@ -224,6 +325,11 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
             }
 
             RaiseTick();
+
+            if (idleSeconds >= IdleThresholdSeconds)
+            {
+                StopForIdle();
+            }
         }
 
         private void FinalizeInterval()
@@ -294,6 +400,8 @@ namespace RPV_Tracker.Domains.TimeTracking.Services
         {
             heartbeat.Stop();
             heartbeat.Dispose();
+            resumeWatch.Stop();
+            resumeWatch.Dispose();
             monitor.Dispose();
         }
     }

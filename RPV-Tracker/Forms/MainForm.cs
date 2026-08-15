@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Windows.Forms;
 using RPV_Tracker.Branding;
 using RPV_Tracker.Controls;
@@ -48,6 +49,14 @@ namespace RPV_Tracker.Forms
         // navigates to other sections and the nav bar can show a live recording indicator.
         private readonly TimeTrackingService tracking = new TimeTrackingService();
 
+        // Lets the shell tell a user-initiated close (the ✕ button / Alt+F4) — which should
+        // just hide to tray and keep tracking running — apart from a real exit (tray "Exit",
+        // signing out, or Windows shutting down), which should stop tracking and let the
+        // process end.
+        private NotifyIcon trayIcon;
+        private bool exitRequested;
+        private bool trayHintShown;
+
         private string activeKey;
 
         /// <summary>When the profile card last closed, so a click that dismissed it can't reopen it.</summary>
@@ -68,7 +77,11 @@ namespace RPV_Tracker.Forms
 
             tracking.StateChanged += tracking_StateChanged;
             tracking.IntervalCompleted += tracking_IntervalCompleted;
+            tracking.SessionStarted += tracking_SessionStarted;
             tracking.SessionEnded += tracking_SessionEnded;
+            tracking.IdleResumeSuggested += tracking_IdleResumeSuggested;
+
+            SetupTrayIcon();
 
             settingsLink = new NavLink { Text = "Settings", PageKey = SettingsKey };
             settingsLink.Click += (s, e) => Navigate(SettingsKey);
@@ -108,7 +121,7 @@ namespace RPV_Tracker.Forms
             try
             {
                 await TrackerSessionsService.UploadAsync(
-                    interval.ScreenshotPath, interval.EndedAt, interval.KeyCount, interval.ClickCount, interval.ActivityPercent);
+                    interval.ScreenshotPath, tracking.SessionId, interval.EndedAt, interval.KeyCount, interval.ClickCount, interval.ActivityPercent);
             }
             catch (Exception ex)
             {
@@ -116,12 +129,80 @@ namespace RPV_Tracker.Forms
             }
         }
 
+        // Pushes the session-level "in progress" record the moment tracking starts, so the
+        // boss/lead audit list shows a live session rather than only learning about it once
+        // it has already ended. Best-effort, same as the interval upload above.
+        private async void tracking_SessionStarted(object sender, TrackingSessionSummary summary)
+        {
+            if (!RpvConfig.TrackerUploadEnabled)
+            {
+                return;
+            }
+
+            try
+            {
+                await TrackerSessionsService.UploadSummaryAsync(summary, "active");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("Tracker session-summary start upload failed: " + ex.Message);
+            }
+        }
+
         // On session end, log it to the local Task history store. There is no server-side
         // end-of-session summary endpoint (the backend's tracker-sessions table is one row
         // per screenshot, not a session aggregate), so this stays local-only.
-        private void tracking_SessionEnded(object sender, TrackingSessionSummary summary)
+        private async void tracking_SessionEnded(object sender, TrackingSessionSummary summary)
         {
             TaskHistoryStore.Append(summary);
+
+            if (RpvConfig.TrackerUploadEnabled)
+            {
+                try
+                {
+                    await TrackerSessionsService.UploadSummaryAsync(
+                        summary, summary.StoppedByIdle ? "idle_stopped" : "completed");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine("Tracker session-summary stop upload failed: " + ex.Message);
+                }
+            }
+
+            if (summary.StoppedByIdle && trayIcon != null)
+            {
+                trayIcon.BalloonTipTitle = "Tracking stopped";
+                trayIcon.BalloonTipText = "No keyboard or mouse activity was detected for 5 minutes, so tracking was stopped automatically.";
+                trayIcon.ShowBalloonTip(5000);
+            }
+        }
+
+        // Fires the moment the operator produces the first key/click after an idle auto-stop.
+        // Brings the window back into view (if it was hidden to tray) so the prompt has
+        // context, then offers to resume the same task rather than leaving the stopped
+        // session to go unnoticed until someone happens to check the tracker page.
+        private void tracking_IdleResumeSuggested(object sender, TrackingSessionSummary summary)
+        {
+            if (!Visible)
+            {
+                ShowFromTray();
+            }
+
+            string task = summary.TaskId.HasValue
+                ? "#" + summary.TaskId + " · " + summary.TaskTitle
+                : "the same task";
+
+            DialogResult resume = MessageBox.Show(this,
+                "Tracking stopped at " + summary.EndedAt.ToString("h:mm tt") + " after 5 minutes of inactivity."
+                    + "\n\nResume tracking on " + task + "?",
+                "Resume tracking?",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (resume == DialogResult.Yes)
+            {
+                tracking.Start(summary.TaskId, summary.TaskTitle, summary.IsOvertime);
+            }
         }
 
         /// <summary>
@@ -350,9 +431,72 @@ namespace RPV_Tracker.Forms
             }
 
             SignOutRequested = true;
+            exitRequested = true;
             await AuthService.LogoutAsync(AppSession.Token);
             AppSession.Clear();
             Close();
+        }
+
+        /// <summary>
+        /// Installs the tray icon that lets the shell keep running (and tracking) after the
+        /// operator dismisses the window, with an explicit "Exit" the only way to actually
+        /// quit and stop the timer.
+        /// </summary>
+        private void SetupTrayIcon()
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Open RPV Workforce", null, (s, e) => ShowFromTray());
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Exit", null, trayExit_Click);
+
+            trayIcon = new NotifyIcon
+            {
+                Icon = Icon ?? SystemIcons.Application,
+                Text = "RPV Workforce",
+                Visible = true,
+                ContextMenuStrip = menu
+            };
+            trayIcon.DoubleClick += (s, e) => ShowFromTray();
+        }
+
+        private void trayExit_Click(object sender, EventArgs e)
+        {
+            exitRequested = true;
+            Close();
+        }
+
+        private void ShowFromTray()
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+        }
+
+        /// <summary>
+        /// Closing the window (the ✕ button / Alt+F4) hides to tray instead of exiting, so
+        /// tracking — and the screenshot/activity capture behind it — keeps running in the
+        /// background. Minimizing already leaves the window merely hidden from view without
+        /// touching tracking, so this only needs to intercept an actual close request; a real
+        /// exit (tray "Exit", signing out, or Windows shutting down) still closes normally.
+        /// </summary>
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (!exitRequested && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                Hide();
+
+                if (!trayHintShown)
+                {
+                    trayHintShown = true;
+                    trayIcon.BalloonTipTitle = "RPV Workforce is still running";
+                    trayIcon.BalloonTipText = "Tracking continues in the background. Right-click this icon and choose Exit to close it fully.";
+                    trayIcon.ShowBalloonTip(4000);
+                }
+                return;
+            }
+
+            base.OnFormClosing(e);
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
@@ -368,8 +512,13 @@ namespace RPV_Tracker.Forms
             }
             tracking.StateChanged -= tracking_StateChanged;
             tracking.IntervalCompleted -= tracking_IntervalCompleted;
+            tracking.SessionStarted -= tracking_SessionStarted;
             tracking.SessionEnded -= tracking_SessionEnded;
+            tracking.IdleResumeSuggested -= tracking_IdleResumeSuggested;
             tracking.Dispose();
+
+            trayIcon.Visible = false;
+            trayIcon.Dispose();
 
             // Pages detached by Controls.Clear() are not covered by the form's Dispose.
             foreach (UserControl page in pages.Values)

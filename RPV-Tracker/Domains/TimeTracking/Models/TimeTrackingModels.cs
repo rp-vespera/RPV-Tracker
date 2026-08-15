@@ -87,5 +87,9 @@ namespace RPV_Tracker.Domains.TimeTracking.Models
 
         /// <summary>True when the operator flagged this session as overtime (OT) when starting it.</summary>
         public bool IsOvertime { get; set; }
+
+        /// <summary>True when this session was stopped automatically after a stretch of no
+        /// keyboard/mouse input, rather than by the operator clicking Stop.</summary>
+        public bool StoppedByIdle { get; set; }
     }
 }
